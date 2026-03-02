@@ -1,0 +1,392 @@
+services:
+  # ═══════════════════════════════════════
+  # USER-FACING
+  # ═══════════════════════════════════════
+
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme.json"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--api=false"
+      - "--api.dashboard=false"
+      - "--log.level=WARN"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${CONFIG_PATH:-./config}/traefik:/etc/traefik
+    networks:
+      - internal
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/jellyfin:/config
+      - ${MEDIA_PATH:-./data/media}:/data/media:ro
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.jellyfin.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/jellyfin`)"
+      - "traefik.http.routers.jellyfin.entrypoints=websecure"
+      - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+    # Uncomment for GPU transcoding:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    networks:
+      - internal
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/seerr:/app/config
+    ports:
+      - "${SEERR_PORT:-5055}:5055"
+    depends_on:
+      - jellyfin
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.seerr.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.seerr.entrypoints=websecure"
+      - "traefik.http.routers.seerr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.seerr.loadbalancer.server.port=5055"
+    networks:
+      - internal
+
+  # ═══════════════════════════════════════
+  # HIDDEN PLUMBING (never exposed)
+  # ═══════════════════════════════════════
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/sonarr:/config
+      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+    networks:
+      - internal
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/radarr:/config
+      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+    networks:
+      - internal
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/prowlarr:/config
+    depends_on:
+      - flaresolverr
+    networks:
+      - internal
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - CAPTCHA_SOLVER=none
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8191"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - internal
+
+  # ═══════════════════════════════════════
+  # ACQUISITION (VPN-protected)
+  # ═══════════════════════════════════════
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_PROVIDER:-mullvad}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
+    ports:
+      - "${QBITTORRENT_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9999"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - vpn
+    networks:
+      - internal
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    network_mode: service:gluetun
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+      - WEBUI_PORT=8080
+    volumes:
+      - ${CONFIG_PATH:-./config}/qbittorrent:/config
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    profiles:
+      - vpn
+
+  # ═══════════════════════════════════════
+  # INFRASTRUCTURE
+  # ═══════════════════════════════════════
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-invisiblearr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-invisiblearr}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-invisiblearr}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+
+  # ═══════════════════════════════════════
+  # AGENT LAYER
+  # ═══════════════════════════════════════
+
+  agent-api:
+    build:
+      context: ./services/agent-api
+    container_name: agent-api
+    restart: unless-stopped
+    volumes:
+      - ./services/shared:/app/shared:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - RD_API_TOKEN=${RD_API_TOKEN:-}
+      - RD_ENABLED=${RD_ENABLED:-false}
+      - PROWLARR_URL=http://prowlarr:9696
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY:-}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-none}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - DEFAULT_MAX_RESOLUTION=${DEFAULT_MAX_RESOLUTION:-1080}
+      - DEFAULT_ALLOW_4K=${DEFAULT_ALLOW_4K:-false}
+      - DEFAULT_MAX_MOVIE_SIZE_GB=${DEFAULT_MAX_MOVIE_SIZE_GB:-15}
+      - DEFAULT_MAX_EPISODE_SIZE_GB=${DEFAULT_MAX_EPISODE_SIZE_GB:-4}
+      - MEDIA_PATH=/data/media
+      - DOWNLOADS_PATH=/data/downloads
+    ports:
+      - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.agent-api.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.agent-api.entrypoints=websecure"
+      - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.agent-api.loadbalancer.server.port=8880"
+    networks:
+      - internal
+
+  agent-worker:
+    build:
+      context: ./services/agent-worker
+    container_name: agent-worker
+    restart: unless-stopped
+    volumes:
+      - ./services/shared:/app/shared:ro
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${MEDIA_PATH:-./data/media}:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - RD_API_TOKEN=${RD_API_TOKEN:-}
+      - RD_ENABLED=${RD_ENABLED:-false}
+      - VPN_ENABLED=${VPN_ENABLED:-false}
+      - PROWLARR_URL=http://prowlarr:9696
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY:-}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-none}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - DEFAULT_MAX_RESOLUTION=${DEFAULT_MAX_RESOLUTION:-1080}
+      - DEFAULT_ALLOW_4K=${DEFAULT_ALLOW_4K:-false}
+      - DEFAULT_MAX_MOVIE_SIZE_GB=${DEFAULT_MAX_MOVIE_SIZE_GB:-15}
+      - DEFAULT_MAX_EPISODE_SIZE_GB=${DEFAULT_MAX_EPISODE_SIZE_GB:-4}
+      - MEDIA_PATH=/data/media
+      - DOWNLOADS_PATH=/data/downloads
+    networks:
+      - internal
+
+  agent-qc:
+    build:
+      context: ./services/agent-qc
+    container_name: agent-qc
+    restart: unless-stopped
+    volumes:
+      - ./services/shared:/app/shared:ro
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${MEDIA_PATH:-./data/media}:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - MEDIA_PATH=/data/media
+      - DOWNLOADS_PATH=/data/downloads
+    networks:
+      - internal
+
+  agent-storage:
+    build:
+      context: ./services/agent-storage
+    container_name: agent-storage
+    restart: unless-stopped
+    volumes:
+      - ./services/shared:/app/shared:ro
+      - ${MEDIA_PATH:-./data/media}:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - MEDIA_PATH=/data/media
+      - JELLYFIN_URL=http://jellyfin:8096
+    networks:
+      - internal
+
+  iptv-gateway:
+    build:
+      context: ./services/iptv-gateway
+    container_name: iptv-gateway
+    restart: unless-stopped
+    volumes:
+      - ./services/shared:/app/shared:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+    ports:
+      - "127.0.0.1:${IPTV_GATEWAY_PORT:-8881}:8881"
+    profiles:
+      - iptv
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

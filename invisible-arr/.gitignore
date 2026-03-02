@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+*.egg-info/
+data/
+config/
+*.log
+.mypy_cache/
+.pytest_cache/
+*.pem
+*.key
+acme.json
+docker-compose.override.yml
+.env.*
