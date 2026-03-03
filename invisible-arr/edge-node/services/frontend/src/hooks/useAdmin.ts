@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getSystemHealth, getJellyfinServerInfo, getJellyfinUsers, getJellyfinLibraryCounts } from '@/api/admin';
-import { getRDStatus } from '@/api/realdebrid';
+import { getRDStatus, getVPNStatus } from '@/api/realdebrid';
 
 export function useSystemHealth() {
   return useQuery({
@@ -38,6 +38,14 @@ export function useRDStatus() {
   return useQuery({
     queryKey: ['rd-status'],
     queryFn: getRDStatus,
+    staleTime: 60_000,
+  });
+}
+
+export function useVPNStatus() {
+  return useQuery({
+    queryKey: ['vpn-status'],
+    queryFn: getVPNStatus,
     staleTime: 60_000,
   });
 }

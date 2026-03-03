@@ -29,12 +29,11 @@ class Settings(BaseSettings):
     rd_api_token: str = ""
     rd_enabled: bool = False
 
-    # VPN
-    vpn_enabled: bool = False
-    vpn_provider: str = ""
+    # Torrents (direct with secure DNS, no VPN)
+    torrent_enabled: bool = True
 
-    # qBittorrent (VPN torrent fallback)
-    qbt_url: str = "http://gluetun:8080"
+    # qBittorrent
+    qbt_url: str = "http://qbittorrent:8080"
     qbt_username: str = "admin"
     qbt_password: str = ""
 

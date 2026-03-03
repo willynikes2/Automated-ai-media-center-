@@ -1,7 +1,6 @@
-import { Download, Check, Search, HardDrive, Zap, Server, ChevronDown, Star } from 'lucide-react';
+import { Download, Check, Search, HardDrive, Zap, Server, Star, Play } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { Card } from '@/components/ui/Card';
 import { useCreateRequest } from '@/hooks/useJobs';
 import { toast } from '@/components/ui/Toast';
 import { useState } from 'react';
@@ -110,6 +109,7 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [selectedDownloader, setSelectedDownloader] = useState<string | null>(null);
+  const [acquisitionMode, setAcquisitionMode] = useState<'download' | 'stream'>('download');
 
   const searchQuery = useQuery({
     queryKey: ['search-releases', title, mediaType],
@@ -121,11 +121,13 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
   const data = searchQuery.data;
   const results = data?.results ?? [];
   const recommended = data?.recommended_index ?? null;
+  const rdAvailable = data?.downloaders_available?.includes('rd') ?? false;
 
   const handleOpen = () => {
     setShowModal(true);
     setSelectedIdx(null);
     setSelectedDownloader(null);
+    setAcquisitionMode('download');
   };
 
   const handleRequest = () => {
@@ -137,12 +139,13 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
         query: title,
         preferred_resolution: release?.resolution,
         preferred_downloader: selectedDownloader as 'rd' | 'torrent' | undefined,
+        acquisition_mode: acquisitionMode,
       },
       {
         onSuccess: () => {
           setRequested(true);
           setShowModal(false);
-          toast(`Requested "${title}"`, 'success');
+          toast(`${acquisitionMode === 'stream' ? 'Stream' : 'Download'} requested for "${title}"`, 'success');
         },
         onError: (err: any) => {
           toast(err?.response?.data?.detail ?? 'Request failed', 'error');
@@ -189,6 +192,48 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={`Request: ${title}`}>
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* Download / Stream toggle */}
+          <div className="flex gap-1 bg-bg-tertiary rounded-lg p-1">
+            <button
+              onClick={() => {
+                setAcquisitionMode('download');
+              }}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                acquisitionMode === 'download'
+                  ? 'bg-accent text-white'
+                  : 'text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              <HardDrive className="h-4 w-4" /> Download
+            </button>
+            <button
+              onClick={() => {
+                setAcquisitionMode('stream');
+                if (rdAvailable) setSelectedDownloader('rd');
+              }}
+              disabled={!rdAvailable}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                acquisitionMode === 'stream'
+                  ? 'bg-accent text-white'
+                  : rdAvailable
+                  ? 'text-text-secondary hover:text-text-primary'
+                  : 'text-text-tertiary/50 cursor-not-allowed'
+              }`}
+            >
+              <Play className="h-4 w-4" /> Stream
+            </button>
+          </div>
+          {acquisitionMode === 'stream' && (
+            <p className="text-[10px] text-text-tertiary">
+              Stream uses Real-Debrid for instant playback without saving to disk.
+            </p>
+          )}
+          {!rdAvailable && (
+            <p className="text-[10px] text-text-tertiary">
+              Streaming requires Real-Debrid to be enabled.
+            </p>
+          )}
+
           {/* Search status */}
           {searchQuery.isLoading && (
             <div className="flex items-center gap-2 text-sm text-text-secondary py-8 justify-center">
@@ -222,8 +267,9 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
                     selected={selectedIdx === i}
                     onClick={() => {
                       setSelectedIdx(i);
-                      // Auto-select first available downloader
-                      if (!selectedDownloader && r.downloaders.length > 0) {
+                      if (acquisitionMode === 'stream') {
+                        setSelectedDownloader('rd');
+                      } else if (!selectedDownloader && r.downloaders.length > 0) {
                         setSelectedDownloader(r.downloaders[0]);
                       }
                     }}
@@ -240,8 +286,8 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
             </div>
           )}
 
-          {/* Downloader selection */}
-          {selectedIdx != null && results[selectedIdx]?.downloaders.length > 1 && (
+          {/* Downloader selection (only for download mode) */}
+          {acquisitionMode === 'download' && selectedIdx != null && results[selectedIdx]?.downloaders.length > 1 && (
             <div>
               <p className="text-xs font-medium text-text-secondary mb-2">Download with</p>
               <div className="flex gap-2">
@@ -272,10 +318,10 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
               Cancel
             </Button>
             <Button onClick={handleRequest} loading={mutation.isPending}>
-              <Download className="h-4 w-4" />
+              {acquisitionMode === 'stream' ? <Play className="h-4 w-4" /> : <Download className="h-4 w-4" />}
               {selectedIdx != null
-                ? `Request ${results[selectedIdx].resolution}p · ${results[selectedIdx].size_gb.toFixed(1)} GB`
-                : 'Request (Auto Select)'}
+                ? `${acquisitionMode === 'stream' ? 'Stream' : 'Request'} ${results[selectedIdx].resolution}p · ${results[selectedIdx].size_gb.toFixed(1)} GB`
+                : `${acquisitionMode === 'stream' ? 'Stream' : 'Request'} (Auto Select)`}
             </Button>
           </div>
         </div>

@@ -54,9 +54,34 @@ export async function getLibraryItems(type: 'Movie' | 'Series', params: Record<s
       SortBy: 'DateCreated,SortName',
       SortOrder: 'Descending',
       Limit: 50,
-      Fields: 'Overview,Genres,DateCreated',
+      Fields: 'Overview,Genres,DateCreated,MediaSources',
       ...params,
     },
   });
+  return res.data;
+}
+
+export async function getJellyfinItem(id: string) {
+  const res = await jellyfinApi.get(`/Items/${id}`, {
+    params: { Fields: 'Overview,MediaSources,Path,Genres,DateCreated' },
+  });
+  return res.data;
+}
+
+export async function deleteJellyfinItem(id: string) {
+  await jellyfinApi.delete(`/Items/${id}`);
+}
+
+export interface StorageInfo {
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  media_gb: number;
+  soft_limit_pct: number;
+  prune_policy: string;
+}
+
+export async function getStorageInfo(): Promise<StorageInfo> {
+  const res = await agentApi.get('/v1/storage');
   return res.data;
 }

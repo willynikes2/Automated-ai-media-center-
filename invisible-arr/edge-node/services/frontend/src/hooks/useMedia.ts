@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems } from '@/api/media';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo } from '@/api/media';
 
 export function useTMDBSearch(query: string, page = 1) {
   return useQuery({
@@ -48,5 +48,32 @@ export function useLibrary(type: 'Movie' | 'Series', params: Record<string, unkn
     queryKey: ['library', type, params],
     queryFn: () => getLibraryItems(type, params),
     staleTime: 60_000,
+  });
+}
+
+export function useJellyfinItem(id: string) {
+  return useQuery({
+    queryKey: ['jellyfin-item', id],
+    queryFn: () => getJellyfinItem(id),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
+export function useStorageInfo() {
+  return useQuery({
+    queryKey: ['storage-info'],
+    queryFn: getStorageInfo,
+    staleTime: 60_000,
+  });
+}
+
+export function useDeleteJellyfinItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteJellyfinItem(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['library'] });
+    },
   });
 }

@@ -294,8 +294,8 @@ async def acquire_with_fallback(
     prefs: dict[str, Any],
     year: int,
 ) -> None:
-    """Try up to 3 candidates, each through available acquisition methods."""
-    max_attempts = min(3, len(scored_candidates))
+    """Try up to 5 candidates, each through available acquisition methods."""
+    max_attempts = min(5, len(scored_candidates))
 
     for i, (candidate, score) in enumerate(scored_candidates[:max_attempts]):
         # Persist selected candidate
@@ -374,8 +374,8 @@ async def acquire(
                 errors.append(msg)
                 await transition(job, JobState.ACQUIRING, msg)
 
-    # 3. VPN Torrent
-    if config.vpn_enabled and config.qbt_password:
+    # 3. Torrent (qBittorrent with secure DNS)
+    if config.torrent_enabled and config.qbt_password:
         try:
             await acquire_via_torrent(job, candidate)
             await _set_acquisition_method(job, "torrent")
@@ -534,7 +534,7 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
 
 
 async def acquire_via_rd_stream(job: Job, candidate: ParsedRelease) -> None:
-    """RD streaming mode -- unrestrict links without downloading to disk."""
+    """RD streaming mode -- unrestrict links and create .strm files in Jellyfin library."""
     config = get_config()
 
     async with RealDebridClient(config.rd_api_token) as rd:
@@ -581,10 +581,58 @@ async def acquire_via_rd_stream(job: Job, candidate: ParsedRelease) -> None:
             )
             await session.commit()
 
+    # Pick the primary video URL (first unrestricted link)
+    primary_url = streaming_urls[0] if streaming_urls else None
+    if not primary_url:
+        raise RuntimeError("No streaming URL available after unrestricting")
+
+    # Create .strm file in Jellyfin library
+    media_root = Path(config.media_path)
+    year = get_year(job)
+
+    if job.media_type == "movie":
+        rel = movie_path(job.title, year, ".strm")
+        strm_dest = media_root / "Movies" / rel
+    else:
+        season = job.season if job.season is not None else 1
+        episode = job.episode if job.episode is not None else 1
+        rel = tv_path(job.title, season, episode, ".strm")
+        strm_dest = media_root / "TV" / rel
+
+    # Path traversal check
+    if not strm_dest.resolve().is_relative_to(media_root.resolve()):
+        raise ValueError(f"Path traversal detected for {strm_dest}")
+
+    await asyncio.to_thread(strm_dest.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(strm_dest.write_text, primary_url, encoding="utf-8")
+    logger.info("Created .strm file: %s", strm_dest)
+
+    # Persist imported path
+    job.imported_path = str(strm_dest)
+    now = datetime.utcnow()
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(
+                imported_path=str(strm_dest), updated_at=now,
+            )
+        )
+        await session.commit()
+    job.updated_at = now
+
+    # Trigger Jellyfin library scan
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{config.jellyfin_url}/Library/Refresh")
+            resp.raise_for_status()
+            logger.info("Triggered Jellyfin library scan")
+    except Exception as exc:
+        logger.warning("Jellyfin library scan trigger failed (non-fatal): %s", exc)
+
     await transition(
         job, JobState.DONE,
-        f"Stream ready: {len(streaming_urls)} link(s)",
-        metadata={"streaming_url_count": len(streaming_urls)},
+        f"Stream ready: {len(streaming_urls)} link(s), .strm created at {strm_dest.name}",
+        metadata={"streaming_url_count": len(streaming_urls), "strm_path": str(strm_dest)},
     )
 
 
@@ -613,37 +661,19 @@ async def acquire_via_usenet(job: Job, candidate: ParsedRelease) -> None:
     await import_files(job, staging_dir)
 
 
-async def check_vpn_health() -> bool:
-    """Check if Gluetun VPN tunnel is up by querying its public IP endpoint."""
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get("http://gluetun:9999/v1/publicip/ip")
-            if resp.status_code != 200:
-                return False
-            data = resp.json()
-            # If Gluetun returns a public IP, the tunnel is up
-            return bool(data.get("public_ip"))
-    except Exception:
-        return False
-
-
 async def acquire_via_torrent(job: Job, candidate: ParsedRelease) -> None:
-    """Download via qBittorrent behind Gluetun VPN."""
+    """Download via qBittorrent (with secure DNS)."""
     config = get_config()
-
-    if not await check_vpn_health():
-        raise RuntimeError("VPN is not healthy — refusing torrent download for safety")
 
     magnet = _resolve_magnet(candidate)
     if not magnet.startswith("magnet:"):
         await transition(job, JobState.ACQUIRING, "Resolving download URL to magnet")
         magnet = await _resolve_download_url(magnet)
 
-    save_path = f"/data/downloads/torrents/{job.id}"
+    save_path = f"/data/torrents/{job.id}"
 
     async with QBittorrentClient(config.qbt_url, config.qbt_username, config.qbt_password) as qbt:
-        await transition(job, JobState.ACQUIRING, "Adding magnet to qBittorrent (VPN)")
-        await qbt.add_magnet(magnet, save_path=save_path)
+        await transition(job, JobState.ACQUIRING, "Adding magnet to qBittorrent")
 
         await asyncio.sleep(3)  # qBittorrent needs a moment to register
 
@@ -655,7 +685,7 @@ async def acquire_via_torrent(job: Job, candidate: ParsedRelease) -> None:
             else:
                 raise RuntimeError("Cannot determine info_hash for torrent polling")
 
-        await transition(job, JobState.ACQUIRING, "Waiting for qBittorrent download (VPN)")
+        await transition(job, JobState.ACQUIRING, "Waiting for qBittorrent download")
         await qbt.poll_until_complete(info_hash, timeout=3600)
 
         await qbt.delete_torrent(info_hash, delete_files=False)

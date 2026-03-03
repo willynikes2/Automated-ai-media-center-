@@ -27,6 +27,7 @@ export interface Job {
   selected_candidate: SelectedCandidate | null;
   rd_torrent_id: string | null;
   imported_path: string | null;
+  acquisition_mode: 'download' | 'stream';
   retry_count: number;
   created_at: string;
   updated_at: string;
@@ -63,7 +64,13 @@ export async function createRequest(body: {
   episode?: number;
   preferred_resolution?: number;
   preferred_downloader?: 'rd' | 'torrent';
+  acquisition_mode?: 'download' | 'stream';
 }): Promise<Job> {
   const res = await agentApi.post('/v1/request', body);
+  return res.data;
+}
+
+export async function retryJob(id: string): Promise<Job> {
+  const res = await agentApi.post(`/v1/jobs/${id}/retry`);
   return res.data;
 }

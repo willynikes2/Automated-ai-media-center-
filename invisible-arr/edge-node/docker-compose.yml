@@ -118,8 +118,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/sonarr:/config
-      - ${MEDIA_PATH:-./data/media}:/data/media
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${DATA_PATH:-./data}:/data
     networks:
       - internal
 
@@ -133,8 +132,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/radarr:/config
-      - ${MEDIA_PATH:-./data/media}:/data/media
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${DATA_PATH:-./data}:/data
     networks:
       - internal
 
@@ -169,38 +167,16 @@ services:
       - internal
 
   # ═══════════════════════════════════════
-  # ACQUISITION (VPN-protected)
+  # DOWNLOAD CLIENTS
   # ═══════════════════════════════════════
-
-  gluetun:
-    image: qmcgaw/gluetun:latest
-    container_name: gluetun
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    environment:
-      - VPN_SERVICE_PROVIDER=${VPN_PROVIDER:-mullvad}
-      - VPN_TYPE=${VPN_TYPE:-wireguard}
-      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
-      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
-      - SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
-    ports:
-      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9999"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    profiles:
-      - vpn
-    networks:
-      - internal
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
     restart: unless-stopped
-    network_mode: service:gluetun
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -208,16 +184,15 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - ${CONFIG_PATH:-./config}/qbittorrent:/config
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-    depends_on:
-      gluetun:
-        condition: service_healthy
-    profiles:
-      - vpn
+      - ${DATA_PATH:-./data}/torrents:/data/torrents
+    ports:
+      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
+    networks:
+      - internal
 
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
-    container_name: automedia-sabnzbd
+    container_name: sabnzbd
     restart: unless-stopped
     environment:
       - PUID=${PUID:-1000}
@@ -225,9 +200,9 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/sabnzbd:/config
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-    profiles:
-      - usenet
+      - ${DATA_PATH:-./data}/usenet:/data/usenet
+    ports:
+      - "127.0.0.1:${SABNZBD_PORT:-8081}:8080"
     networks:
       - internal
 
@@ -337,8 +312,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DATA_PATH:-./data}:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -352,11 +326,11 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
-      - VPN_ENABLED=${VPN_ENABLED:-false}
+      - TORRENT_ENABLED=${TORRENT_ENABLED:-true}
       - USENET_ENABLED=${USENET_ENABLED:-false}
       - SABNZBD_URL=http://sabnzbd:8080
       - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
-      - QBT_URL=http://gluetun:8080
+      - QBT_URL=http://qbittorrent:8080
       - QBT_USERNAME=admin
       - QBT_PASSWORD=${QBT_PASSWORD:-}
       - PROWLARR_URL=http://prowlarr:9696
@@ -384,8 +358,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DATA_PATH:-./data}:/data
     depends_on:
       postgres:
         condition: service_healthy

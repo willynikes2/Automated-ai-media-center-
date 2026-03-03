@@ -1,9 +1,35 @@
 import { StateBadge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { JobTimeline } from './JobTimeline';
+import { useRetryJob } from '@/hooks/useJobs';
+import { toast } from '@/components/ui/Toast';
+import { RefreshCw } from 'lucide-react';
 import type { JobDetail as JobDetailType } from '@/api/jobs';
 
+const FRIENDLY_ERRORS: Record<string, string> = {
+  'Unhandled exception during processing': 'Something went wrong while processing this request. It may work on retry.',
+  'Prowlarr search failed': 'Could not search for releases. The indexer may be temporarily down.',
+  'No candidates found': 'No suitable releases were found matching your quality preferences.',
+  'RD magnet error': 'Real-Debrid could not process this torrent. Try a different release or downloader.',
+};
+
+function friendlyError(message: string): string {
+  return FRIENDLY_ERRORS[message] ?? message;
+}
+
 export function JobDetailView({ job }: { job: JobDetailType }) {
+  const retryMutation = useRetryJob();
+
+  const handleRetry = () => {
+    retryMutation.mutate(job.id, {
+      onSuccess: () => toast('Job queued for retry', 'success'),
+      onError: () => toast('Failed to retry job', 'error'),
+    });
+  };
+
+  const lastErrorMessage = job.events?.length > 0 ? job.events[job.events.length - 1].message : '';
+
   return (
     <div className="space-y-6">
       <div>
@@ -51,11 +77,26 @@ export function JobDetailView({ job }: { job: JobDetailType }) {
       {/* Error */}
       {job.state === 'FAILED' && (
         <Card className="p-4 border-status-failed/20">
-          <h3 className="text-sm font-medium text-status-failed mb-1">Failed</h3>
-          <p className="text-sm text-text-secondary">
-            Download failed{job.retry_count > 0 ? ` after ${job.retry_count} retries` : ''}.
-            {job.events?.length > 0 && ` Last: ${job.events[job.events.length - 1].message}`}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-status-failed mb-1">Download Failed</h3>
+              <p className="text-sm text-text-secondary">
+                {lastErrorMessage ? friendlyError(lastErrorMessage) : 'An unexpected error occurred.'}
+              </p>
+              {job.retry_count > 0 && (
+                <p className="text-xs text-text-tertiary mt-1">
+                  Attempted {job.retry_count} {job.retry_count === 1 ? 'retry' : 'retries'}
+                </p>
+              )}
+            </div>
+            <Button
+              variant="secondary"
+              onClick={handleRetry}
+              loading={retryMutation.isPending}
+            >
+              <RefreshCw className="h-4 w-4" /> Retry
+            </Button>
+          </div>
         </Card>
       )}
     </div>

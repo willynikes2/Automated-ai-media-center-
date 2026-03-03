@@ -81,6 +81,28 @@ def parse_release_title(title: str) -> ParsedRelease:
             p.ban_reason = f"Banned tag: {bt}"
             break
 
+    # TRaSH unwanted: LQ release groups
+    lq_groups = [
+        r'\bYIFY\b', r'\bYTS\b', r'\bEVO\b', r'\bAXXO\b', r'\bKOOKS\b',
+        r'\bRAARBG\b', r'\bMeGusta\b', r'\bHive[\-\.]?CM8\b',
+        r'\bSEZON\b', r'\bTiGER\b', r'\bTROPIC\b', r'\bPSA\b',
+    ]
+    if not p.banned:
+        for lg in lq_groups:
+            if re.search(lg, title, re.I):
+                p.banned = True
+                p.ban_reason = f"LQ release group: {lg}"
+                break
+
+    # TRaSH unwanted: BR-DISK / 3D
+    if not p.banned:
+        if re.search(r'\b(BD25|BD50|BDMV|COMPLETE[\.\-\s]?BLURAY)\b', title, re.I):
+            p.banned = True
+            p.ban_reason = "BR-DISK (full disc)"
+        elif re.search(r'\b3D\b', title, re.I):
+            p.banned = True
+            p.ban_reason = "3D release"
+
     return p
 
 
@@ -99,11 +121,19 @@ def score_candidate(parsed: ParsedRelease, prefs: dict) -> int:
     if parsed.size_gb > 0 and parsed.size_gb > max_size:
         return -1
 
+    # TRaSH: Reject REMUX for HD content (too large for non-4K)
+    if parsed.source == "REMUX" and parsed.resolution <= 1080:
+        return -1
+
+    # TRaSH: Reject AV1 (poor playback compatibility)
+    if parsed.codec == "AV1":
+        return -1
+
     # Resolution score
     res_scores = {2160: 100, 1080: 80, 720: 50, 480: 20}
     score = res_scores.get(parsed.resolution, 10)
 
-    # Source score
+    # Source score (REMUX only reachable here for 4K)
     src_scores = {
         "REMUX": 100, "BluRay": 90, "WEB-DL": 80, "WEB": 75,
         "WEBRip": 60, "BDRip": 55, "HDRip": 50, "HDTV": 40,
@@ -111,15 +141,22 @@ def score_candidate(parsed: ParsedRelease, prefs: dict) -> int:
     }
     score += src_scores.get(parsed.source, 10)
 
-    # Codec score
-    codec_scores = {
-        "AV1": 85, "x265": 80, "x264": 60, "VP9": 50,
-        "MPEG2": 20, "unknown": 30,
-    }
-    score += codec_scores.get(parsed.codec, 30)
+    # Codec score — TRaSH x265 HD penalty (x265 at 1080p has limited benefit)
+    if parsed.codec == "x265" and parsed.resolution <= 1080:
+        score += 40  # reduced from 80
+    else:
+        codec_scores = {
+            "x265": 80, "x264": 60, "VP9": 50,
+            "MPEG2": 20, "unknown": 30,
+        }
+        score += codec_scores.get(parsed.codec, 30)
 
     # Seeder bonus (cap at 20)
     score += min(parsed.seeders // 10, 20)
+
+    # Protocol preference: usenet is faster than torrent
+    if parsed.protocol == "usenet":
+        score += 30
 
     return score
 

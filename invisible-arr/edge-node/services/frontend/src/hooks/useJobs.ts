@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getJobs, getJob, createRequest, type Job } from '@/api/jobs';
+import { getJobs, getJob, createRequest, retryJob, type Job } from '@/api/jobs';
 
 export function useJobs(params: { state?: string; limit?: number } = {}) {
   return useQuery({
@@ -30,6 +30,16 @@ export function useCreateRequest() {
 
 export function useActiveJobs() {
   return useJobs({ limit: 50 });
+}
+
+export function useRetryJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => retryJob(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
 }
 
 const TERMINAL: string[] = ['DONE', 'FAILED'];

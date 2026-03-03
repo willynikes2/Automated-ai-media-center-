@@ -2,15 +2,17 @@ import { useState } from 'react';
 import { SourceManager } from '@/components/iptv/SourceManager';
 import { ChannelGrid } from '@/components/iptv/ChannelGrid';
 import { EPGPreview } from '@/components/iptv/EPGPreview';
+import { EPGGuide } from '@/components/iptv/EPGGuide';
 
 const tabs = [
-  { key: 'sources', label: 'Sources' },
   { key: 'channels', label: 'Channels' },
+  { key: 'guide', label: 'Guide' },
+  { key: 'sources', label: 'Sources' },
   { key: 'setup', label: 'Setup' },
 ] as const;
 
 export function IPTVPage() {
-  const [tab, setTab] = useState<string>('sources');
+  const [tab, setTab] = useState<string>('channels');
 
   return (
     <div className="px-4 md:px-8 py-6">
@@ -31,8 +33,9 @@ export function IPTVPage() {
         ))}
       </div>
 
-      {tab === 'sources' && <SourceManager />}
       {tab === 'channels' && <ChannelGrid />}
+      {tab === 'guide' && <EPGGuide />}
+      {tab === 'sources' && <SourceManager />}
       {tab === 'setup' && <EPGPreview />}
     </div>
   );

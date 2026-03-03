@@ -1,4 +1,5 @@
 import { Check, Circle, X } from 'lucide-react';
+import { getStateLabel } from '@/components/ui/Badge';
 import type { JobState, JobEvent } from '@/api/jobs';
 
 const PIPELINE: JobState[] = ['CREATED', 'RESOLVING', 'SEARCHING', 'SELECTED', 'ACQUIRING', 'IMPORTING', 'VERIFYING', 'DONE'];
@@ -18,7 +19,6 @@ export function JobTimeline({ currentState, events }: { currentState: string; ev
         {PIPELINE.map((step, i) => {
           const done = currentIdx > i;
           const active = currentIdx === i;
-          const failed = isFailed && i === 0; // show failure indicator
 
           return (
             <div key={step} className="flex items-center">
@@ -37,7 +37,7 @@ export function JobTimeline({ currentState, events }: { currentState: string; ev
                   {done ? <Check className="h-3.5 w-3.5" /> : isFailed && i <= 1 ? <X className="h-3.5 w-3.5" /> : <Circle className="h-3 w-3" />}
                 </div>
                 <span className={`text-[9px] mt-1 whitespace-nowrap ${active ? 'text-accent font-medium' : 'text-text-tertiary'}`}>
-                  {step}
+                  {getStateLabel(step)}
                 </span>
               </div>
               {i < PIPELINE.length - 1 && (
@@ -58,7 +58,7 @@ export function JobTimeline({ currentState, events }: { currentState: string; ev
                 <span className="text-text-tertiary whitespace-nowrap shrink-0">
                   {new Date(ev.created_at).toLocaleTimeString()}
                 </span>
-                <span className="font-medium text-text-primary">{ev.state}</span>
+                <span className="font-medium text-text-primary">{getStateLabel(ev.state)}</span>
                 {ev.message && <span className="text-text-secondary truncate">{ev.message}</span>}
               </div>
             ))}

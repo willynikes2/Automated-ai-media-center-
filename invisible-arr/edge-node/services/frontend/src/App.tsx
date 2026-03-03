@@ -14,6 +14,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { ActivityPage } from '@/pages/ActivityPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { QuickConnectPage } from '@/pages/QuickConnectPage';
+import { LibraryItemPage } from '@/pages/LibraryItemPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="requests/:id" element={<RequestsPage />} />
             <Route path="activity" element={<ActivityPage />} />
             <Route path="library" element={<LibraryPage />} />
+            <Route path="library/:id" element={<LibraryItemPage />} />
             <Route path="iptv" element={<IPTVPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
