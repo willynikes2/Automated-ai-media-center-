@@ -57,7 +57,7 @@ services:
       - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
     labels:
       - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.jellyfin.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/jellyfin`)"
+      - "traefik.http.routers.jellyfin.rule=Host(`media.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.jellyfin.entrypoints=websecure"
       - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
@@ -79,12 +79,7 @@ services:
       - "127.0.0.1:${SEERR_PORT:-5055}:5055"
     depends_on:
       - jellyfin
-    labels:
-      - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.seerr.rule=Host(`${DOMAIN:-localhost}`)"
-      - "traefik.http.routers.seerr.entrypoints=websecure"
-      - "traefik.http.routers.seerr.tls.certresolver=letsencrypt"
-      - "traefik.http.services.seerr.loadbalancer.server.port=5055"
+    # Seerr kept for reference only — localhost debug access, no public routing
     networks:
       - internal
 
@@ -285,10 +280,16 @@ services:
       start_period: 30s
     labels:
       - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.agent-api.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.agent-api.rule=Host(`api.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.agent-api.entrypoints=websecure"
       - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-api.middlewares=api-cors"
       - "traefik.http.services.agent-api.loadbalancer.server.port=8880"
+      # CORS middleware for frontend cross-origin requests
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowheaders=Content-Type,X-Api-Key,Authorization"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=https://app.${DOMAIN:-localhost}"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolmaxage=3600"
     networks:
       - internal
 
