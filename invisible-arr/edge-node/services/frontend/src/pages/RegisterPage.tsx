@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Zap } from 'lucide-react';
+import { Scissors } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useRegister } from '@/hooks/useAuth';
@@ -47,9 +47,9 @@ export function RegisterPage() {
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center">
-            <Zap className="h-6 w-6 text-white" />
+            <Scissors className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">AutoMedia</h1>
+          <h1 className="text-2xl font-bold tracking-tight">CutDaCord.app</h1>
         </div>
 
         <h2 className="text-lg font-semibold text-text-primary text-center mb-6">

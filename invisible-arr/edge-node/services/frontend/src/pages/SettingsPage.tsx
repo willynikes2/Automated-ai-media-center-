@@ -191,7 +191,7 @@ export function SettingsPage() {
       <Card className="p-5">
         <h2 className="text-lg font-semibold mb-1">Device Pairing</h2>
         <p className="text-xs text-text-secondary mb-4">
-          Use Quick Connect to link external devices like TVs and streaming boxes to your Jellyfin account.
+          Use Quick Connect to link external devices like TVs and streaming boxes to your CutDaCord account.
         </p>
         <QuickConnect />
       </Card>

@@ -10,13 +10,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
-        name: 'AutoMedia',
-        short_name: 'AutoMedia',
-        description: 'Your personal media server — request, stream, manage.',
+        name: 'CutDaCord.app',
+        short_name: 'CutDaCord',
+        description: 'Your streaming, your way — request, stream, manage.',
         start_url: '/',
         display: 'standalone',
-        background_color: '#0a0a1a',
-        theme_color: '#6366f1',
+        background_color: '#101010',
+        theme_color: '#E53935',
         orientation: 'any',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },

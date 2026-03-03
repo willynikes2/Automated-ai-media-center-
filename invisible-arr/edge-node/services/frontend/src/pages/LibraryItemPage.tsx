@@ -186,7 +186,7 @@ export function LibraryItemPage() {
             <div className="flex flex-wrap gap-3 mt-6">
               <a href={jellyfinUrl} target="_blank" rel="noopener noreferrer">
                 <Button size="lg">
-                  <Play className="h-4 w-4" /> Play on Jellyfin
+                  <Play className="h-4 w-4" /> Play
                 </Button>
               </a>
               <Button variant="secondary" onClick={handleRedownload}>

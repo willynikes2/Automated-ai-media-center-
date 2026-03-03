@@ -47,14 +47,14 @@ export function SystemHealth() {
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-4">
           <Server className="h-5 w-5 text-accent" />
-          <h3 className="font-semibold">Jellyfin Server</h3>
+          <h3 className="font-semibold">Media Server</h3>
         </div>
         {jfLoading ? (
           <p className="text-sm text-text-secondary">Checking...</p>
         ) : !jfInfo ? (
           <div className="flex items-center gap-2 text-sm text-status-failed">
             <XCircle className="h-4 w-4" />
-            <span>Jellyfin unreachable</span>
+            <span>Media server unreachable</span>
           </div>
         ) : (
           <div className="space-y-2 text-sm">

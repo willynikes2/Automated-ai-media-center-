@@ -84,7 +84,7 @@ export async function loginWithJellyfin(username: string, password: string): Pro
     {
       headers: {
         'X-Emby-Authorization':
-          'MediaBrowser Client="AutoMedia", Device="PWA", DeviceId="automedia-pwa", Version="1.0.0"',
+          'MediaBrowser Client="CutDaCord", Device="PWA", DeviceId="automedia-pwa", Version="1.0.0"',
       },
     },
   );

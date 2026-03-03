@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════
-# Invisible Arr — Edge Node Installer
+# CutDaCord.app — Edge Node Installer
 # ══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -85,7 +85,7 @@ fi
 # ---------------------------------------------------------------------------
 
 echo ""
-echo -e "${BOLD}═══ Invisible Arr Setup ═══${RESET}"
+echo -e "${BOLD}═══ CutDaCord.app Setup ═══${RESET}"
 echo ""
 
 # TMDB API Key (required)
@@ -232,7 +232,7 @@ wait_healthy redis || true
 # ---------------------------------------------------------------------------
 
 echo ""
-echo -e "${BOLD}═══ Invisible Arr is running! ═══${RESET}"
+echo -e "${BOLD}═══ CutDaCord.app is running! ═══${RESET}"
 echo ""
 
 DOMAIN_VAL=$(grep '^DOMAIN=' .env | cut -d'=' -f2)

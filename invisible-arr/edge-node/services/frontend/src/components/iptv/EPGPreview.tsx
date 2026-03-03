@@ -19,9 +19,9 @@ export function EPGPreview() {
 
   return (
     <div className="space-y-4">
-      <h3 className="font-semibold">Jellyfin Live TV Setup</h3>
+      <h3 className="font-semibold">Live TV Setup</h3>
       <p className="text-sm text-text-secondary">
-        Add these URLs to Jellyfin under Dashboard → Live TV to enable IPTV channels.
+        Add these URLs to your media server under Dashboard → Live TV to enable IPTV channels.
       </p>
 
       <Card className="p-4 space-y-3">
@@ -49,7 +49,7 @@ export function EPGPreview() {
       <Card className="p-4">
         <h4 className="text-sm font-medium mb-2">Setup Steps</h4>
         <ol className="text-sm text-text-secondary space-y-1.5 list-decimal list-inside">
-          <li>Open Jellyfin Dashboard → Live TV</li>
+          <li>Open Media Server Dashboard → Live TV</li>
           <li>Click "Add" under Tuner Devices → select "M3U Tuner" → paste the M3U URL above</li>
           <li>Click "Add" under TV Guide Data Providers → select "XMLTV" → paste the EPG URL above</li>
           <li>Click "Refresh Guide Data" to load channels and EPG</li>

@@ -104,6 +104,20 @@ services:
     networks:
       - internal
 
+  landing:
+    build:
+      context: ./services/landing
+    container_name: cutdacord-landing
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.landing.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.landing.entrypoints=websecure"
+      - "traefik.http.routers.landing.tls.certresolver=letsencrypt"
+      - "traefik.http.services.landing.loadbalancer.server.port=80"
+    networks:
+      - internal
+
   # ═══════════════════════════════════════
   # HIDDEN PLUMBING (never exposed)
   # ═══════════════════════════════════════
@@ -303,7 +317,7 @@ services:
       # CORS middleware for frontend cross-origin requests
       - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
       - "traefik.http.middlewares.api-cors.headers.accesscontrolallowheaders=Content-Type,X-Api-Key,Authorization"
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=https://app.${DOMAIN:-localhost}"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=https://app.${DOMAIN:-localhost},https://media.${DOMAIN:-localhost}"
       - "traefik.http.middlewares.api-cors.headers.accesscontrolmaxage=3600"
     networks:
       - internal
@@ -416,6 +430,12 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
     ports:
       - "127.0.0.1:${IPTV_GATEWAY_PORT:-8881}:8881"
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.iptv.rule=Host(`iptv.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.iptv.entrypoints=websecure"
+      - "traefik.http.routers.iptv.tls.certresolver=letsencrypt"
+      - "traefik.http.services.iptv.loadbalancer.server.port=8881"
     profiles:
       - iptv
     networks:

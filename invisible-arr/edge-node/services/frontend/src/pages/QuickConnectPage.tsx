@@ -1,6 +1,6 @@
 import { QuickConnect } from '@/components/jellyfin/QuickConnect';
 import { Link } from 'react-router-dom';
-import { Zap, ArrowLeft } from 'lucide-react';
+import { Scissors, ArrowLeft } from 'lucide-react';
 
 export function QuickConnectPage() {
   return (
@@ -8,9 +8,9 @@ export function QuickConnectPage() {
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center">
-            <Zap className="h-6 w-6 text-white" />
+            <Scissors className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">AutoMedia</h1>
+          <h1 className="text-2xl font-bold tracking-tight">CutDaCord.app</h1>
         </div>
 
         <QuickConnect />

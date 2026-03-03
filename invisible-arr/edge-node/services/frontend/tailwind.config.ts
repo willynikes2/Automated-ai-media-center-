@@ -6,14 +6,14 @@ export default {
     extend: {
       colors: {
         bg: {
-          primary: '#0a0a1a',
-          secondary: '#111127',
-          tertiary: '#1a1a3e',
+          primary: '#101010',
+          secondary: '#181818',
+          tertiary: '#202020',
         },
         accent: {
-          DEFAULT: '#6366f1',
-          hover: '#818cf8',
-          muted: '#4f46e5',
+          DEFAULT: '#E53935',
+          hover: '#EF5350',
+          muted: '#C62828',
         },
         status: {
           available: '#22c55e',

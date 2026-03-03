@@ -58,6 +58,6 @@ export const useAuthStore = create<AuthState>()(
         });
       },
     }),
-    { name: 'automedia-auth' }
+    { name: 'cutdacord-auth' }
   )
 );

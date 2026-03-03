@@ -126,7 +126,7 @@ export function AdminDashboard() {
             { name: 'Agent API', ok: health?.status === 'ok' },
             { name: 'Database', ok: health?.db === 'ok' },
             { name: 'Redis', ok: health?.redis === 'ok' },
-            { name: 'Jellyfin', ok: !!jfInfo?.Version },
+            { name: 'Media Server', ok: !!jfInfo?.Version },
           ].map((svc) => (
             <div key={svc.name} className="flex items-center gap-2 text-sm">
               {svc.ok ? (

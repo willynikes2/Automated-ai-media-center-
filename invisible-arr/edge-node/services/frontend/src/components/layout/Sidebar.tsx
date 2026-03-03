@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Compass, Search, Library, Download, Activity, Tv, Settings, Shield, DollarSign, Zap, LogOut, Users, Mail } from 'lucide-react';
+import { Compass, Search, Library, Download, Activity, Tv, Settings, Shield, DollarSign, Scissors, LogOut, Users, Mail } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useLogout } from '@/hooks/useAuth';
@@ -45,9 +45,9 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 h-16 border-b border-white/5">
         <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center shrink-0">
-          <Zap className="h-5 w-5 text-white" />
+          <Scissors className="h-5 w-5 text-white" />
         </div>
-        {sidebarOpen && <span className="font-bold text-lg tracking-tight">AutoMedia</span>}
+        {sidebarOpen && <span className="font-bold text-lg tracking-tight">CutDaCord.app</span>}
       </div>
 
       {/* Nav */}

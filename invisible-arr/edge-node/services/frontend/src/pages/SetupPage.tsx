@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { Eye, EyeOff, Check, ChevronRight, ChevronLeft, ExternalLink, Zap, PartyPopper, Lock } from 'lucide-react';
+import { Eye, EyeOff, Check, ChevronRight, ChevronLeft, ExternalLink, Scissors, PartyPopper, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Toggle } from '@/components/ui/Toggle';
@@ -76,9 +76,9 @@ export function SetupPage() {
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-6">
           <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center">
-            <Zap className="h-6 w-6 text-white" />
+            <Scissors className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">AutoMedia</h1>
+          <h1 className="text-2xl font-bold tracking-tight">CutDaCord.app</h1>
         </div>
 
         <StepIndicator current={step} total={3} />

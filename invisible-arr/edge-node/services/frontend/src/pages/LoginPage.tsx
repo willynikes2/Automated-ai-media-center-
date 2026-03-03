@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Zap } from 'lucide-react';
+import { Scissors } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useEmailLogin, useJellyfinLogin } from '@/hooks/useAuth';
@@ -45,9 +45,9 @@ export function LoginPage() {
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center">
-            <Zap className="h-6 w-6 text-white" />
+            <Scissors className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">AutoMedia</h1>
+          <h1 className="text-2xl font-bold tracking-tight">CutDaCord.app</h1>
         </div>
 
         {/* Tabs */}
@@ -72,7 +72,7 @@ export function LoginPage() {
                 : 'text-text-tertiary border-transparent hover:text-text-secondary'
             }`}
           >
-            Jellyfin
+            Media Server
           </button>
         </div>
 
@@ -104,7 +104,7 @@ export function LoginPage() {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Your Jellyfin username"
+                placeholder="Your media server username"
                 autoComplete="username"
                 autoFocus
               />
@@ -113,7 +113,7 @@ export function LoginPage() {
                 type="password"
                 value={jellyfinPassword}
                 onChange={(e) => setJellyfinPassword(e.target.value)}
-                placeholder="Your Jellyfin password"
+                placeholder="Your media server password"
                 autoComplete="current-password"
               />
             </>

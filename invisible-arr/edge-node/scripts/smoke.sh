@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════
-# Invisible Arr — Smoke Test Suite
+# CutDaCord.app — Smoke Test Suite
 # ══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -51,7 +51,7 @@ check() {
 }
 
 echo ""
-echo -e "${BOLD}═══ Invisible Arr — Smoke Tests ═══${RESET}"
+echo -e "${BOLD}═══ CutDaCord.app — Smoke Tests ═══${RESET}"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -129,24 +129,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. VPN leak test (conditional)
-# ---------------------------------------------------------------------------
-
-if [ "${VPN_ENABLED:-false}" = "true" ]; then
-    VPN_RESULT=1
-    # Fetch the public IP through the gluetun container
-    VPN_IP=$(docker exec gluetun wget -qO- https://ipinfo.io/ip 2>/dev/null || echo "")
-    HOST_IP=$(curl -s https://ipinfo.io/ip 2>/dev/null || echo "unknown")
-    if [ -n "${VPN_IP}" ] && [ "${VPN_IP}" != "${HOST_IP}" ]; then
-        VPN_RESULT=0
-    fi
-    check "VPN leak test (VPN IP: ${VPN_IP:-none}, Host IP: ${HOST_IP})" "${VPN_RESULT}"
-else
-    check "VPN leak test" 0 "VPN_ENABLED=false"
-fi
-
-# ---------------------------------------------------------------------------
-# 8. IPTV gateway (conditional)
+# 7. IPTV gateway (conditional)
 # ---------------------------------------------------------------------------
 
 if [ "${IPTV_ENABLED:-false}" = "true" ]; then
@@ -162,7 +145,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Job dry-run (POST /v1/request)
+# 8. Job dry-run (POST /v1/request)
 # ---------------------------------------------------------------------------
 
 JOB_RESULT=1
@@ -178,7 +161,7 @@ fi
 check "Job dry-run POST /v1/request (HTTP ${JOB_CODE})" "${JOB_RESULT}"
 
 # ---------------------------------------------------------------------------
-# 10. Traefik TLS (conditional)
+# 9. Traefik TLS (conditional)
 # ---------------------------------------------------------------------------
 
 DOMAIN_VAL="${DOMAIN:-}"
@@ -193,6 +176,22 @@ if [ -n "${DOMAIN_VAL}" ]; then
     check "Traefik TLS for app.${DOMAIN_VAL} (HTTP ${TLS_CODE})" "${TLS_RESULT}"
 else
     check "Traefik TLS" 0 "No DOMAIN configured"
+fi
+
+# ---------------------------------------------------------------------------
+# 10. IPTV subdomain (conditional)
+# ---------------------------------------------------------------------------
+
+if [ "${IPTV_ENABLED:-false}" = "true" ] && [ -n "${DOMAIN:-}" ]; then
+    IPTV_SUB_RESULT=1
+    IPTV_SUB_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 \
+        "https://iptv.${DOMAIN}/health" 2>/dev/null || echo "000")
+    if [ "${IPTV_SUB_CODE}" = "200" ]; then
+        IPTV_SUB_RESULT=0
+    fi
+    check "IPTV subdomain iptv.${DOMAIN} (HTTP ${IPTV_SUB_CODE})" "${IPTV_SUB_RESULT}"
+else
+    check "IPTV subdomain" 0 "IPTV_ENABLED=false or no DOMAIN"
 fi
 
 # ---------------------------------------------------------------------------

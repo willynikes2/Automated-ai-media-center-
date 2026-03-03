@@ -74,7 +74,7 @@ export function LibraryPage() {
   return (
     <div className="px-4 md:px-8 py-6">
       <h1 className="text-2xl font-bold mb-1">Library</h1>
-      <p className="text-sm text-text-secondary mb-4">Browse your Jellyfin media library.</p>
+      <p className="text-sm text-text-secondary mb-4">Browse your media library.</p>
 
       {/* Storage bar */}
       {storageData && (
@@ -125,7 +125,7 @@ export function LibraryPage() {
       {isLoading ? (
         <FullSpinner />
       ) : !filteredItems.length ? (
-        <EmptyState icon={Library} title="Nothing here yet" description={resFilter !== 'any' ? 'No items match your filter.' : 'Your Jellyfin library is empty.'} />
+        <EmptyState icon={Library} title="Nothing here yet" description={resFilter !== 'any' ? 'No items match your filter.' : 'Your library is empty.'} />
       ) : (
         <>
           <p className="text-xs text-text-tertiary mb-3">{filteredItems.length} items</p>

@@ -17,7 +17,7 @@ export function IPTVPage() {
   return (
     <div className="px-4 md:px-8 py-6">
       <h1 className="text-2xl font-bold mb-1">Live TV</h1>
-      <p className="text-sm text-text-secondary mb-6">Manage your IPTV sources, channels, and Jellyfin integration.</p>
+      <p className="text-sm text-text-secondary mb-6">Manage your IPTV sources, channels, and Live TV integration.</p>
 
       <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit mb-6">
         {tabs.map((t) => (
