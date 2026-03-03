@@ -184,12 +184,13 @@ check "Job dry-run POST /v1/request (HTTP ${JOB_CODE})" "${JOB_RESULT}"
 DOMAIN_VAL="${DOMAIN:-}"
 if [ -n "${DOMAIN_VAL}" ]; then
     TLS_RESULT=1
+    # Test subdomain routing (app. prefix) since bare domain has no route
     TLS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-        "https://${DOMAIN_VAL}" 2>/dev/null || echo "000")
+        "https://app.${DOMAIN_VAL}" 2>/dev/null || echo "000")
     if [[ "${TLS_CODE}" =~ ^(200|301|302|307|308)$ ]]; then
         TLS_RESULT=0
     fi
-    check "Traefik TLS for ${DOMAIN_VAL} (HTTP ${TLS_CODE})" "${TLS_RESULT}"
+    check "Traefik TLS for app.${DOMAIN_VAL} (HTTP ${TLS_CODE})" "${TLS_RESULT}"
 else
     check "Traefik TLS" 0 "No DOMAIN configured"
 fi
