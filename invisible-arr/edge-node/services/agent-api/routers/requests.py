@@ -46,7 +46,19 @@ async def create_request(
 ) -> JobResponse:
     """Accept a media request, persist a Job, and enqueue it for processing."""
 
-    user_id = await _get_or_create_default_user()
+    # Use API key to look up the user; fall back to default if missing
+    user_id: uuid.UUID | None = None
+    if x_api_key:
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(User).where(User.api_key == x_api_key)
+            )
+            user: User | None = result.scalar_one_or_none()
+            if user:
+                user_id = user.id
+
+    if user_id is None:
+        user_id = await _get_or_create_default_user()
 
     async with get_session_factory()() as session:
         job = Job(
@@ -58,6 +70,7 @@ async def create_request(
             season=body.season,
             episode=body.episode,
             state=JobState.CREATED,
+            acquisition_mode=body.acquisition_mode,
         )
         session.add(job)
         await session.commit()
@@ -89,6 +102,9 @@ async def create_request(
         selected_candidate=job.selected_candidate,
         rd_torrent_id=job.rd_torrent_id,
         imported_path=job.imported_path,
+        acquisition_mode=job.acquisition_mode,
+        acquisition_method=job.acquisition_method,
+        streaming_urls=job.streaming_urls,
         retry_count=job.retry_count,
         created_at=job.created_at,
         updated_at=job.updated_at,

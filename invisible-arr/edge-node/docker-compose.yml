@@ -43,7 +43,8 @@ services:
       - internal
 
   jellyfin:
-    image: jellyfin/jellyfin:latest
+    build:
+      context: ./services/jellyfin
     container_name: jellyfin
     restart: unless-stopped
     environment:
@@ -53,17 +54,37 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
       - ${MEDIA_PATH:-./data/media}:/data/media:ro
+      - ${RECORDINGS_PATH:-./data/recordings}:/data/recordings
     ports:
       - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
     labels:
       - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.jellyfin.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/jellyfin`)"
+      - "traefik.http.routers.jellyfin.rule=Host(`media.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.jellyfin.entrypoints=websecure"
       - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
     # Uncomment for GPU transcoding:
     # devices:
     #   - /dev/dri:/dev/dri
+    networks:
+      - internal
+
+  frontend:
+    build:
+      context: ./services/frontend
+    container_name: automedia-frontend
+    restart: unless-stopped
+    depends_on:
+      - agent-api
+      - jellyfin
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
     networks:
       - internal
 
@@ -79,12 +100,7 @@ services:
       - "127.0.0.1:${SEERR_PORT:-5055}:5055"
     depends_on:
       - jellyfin
-    labels:
-      - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.seerr.rule=Host(`${DOMAIN:-localhost}`)"
-      - "traefik.http.routers.seerr.entrypoints=websecure"
-      - "traefik.http.routers.seerr.tls.certresolver=letsencrypt"
-      - "traefik.http.services.seerr.loadbalancer.server.port=5055"
+    # Seerr kept for reference only — localhost debug access, no public routing
     networks:
       - internal
 
@@ -102,8 +118,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/sonarr:/config
-      - ${MEDIA_PATH:-./data/media}:/data/media
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${DATA_PATH:-./data}:/data
     networks:
       - internal
 
@@ -117,8 +132,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/radarr:/config
-      - ${MEDIA_PATH:-./data/media}:/data/media
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+      - ${DATA_PATH:-./data}:/data
     networks:
       - internal
 
@@ -153,38 +167,16 @@ services:
       - internal
 
   # ═══════════════════════════════════════
-  # ACQUISITION (VPN-protected)
+  # DOWNLOAD CLIENTS
   # ═══════════════════════════════════════
-
-  gluetun:
-    image: qmcgaw/gluetun:latest
-    container_name: gluetun
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    environment:
-      - VPN_SERVICE_PROVIDER=${VPN_PROVIDER:-mullvad}
-      - VPN_TYPE=${VPN_TYPE:-wireguard}
-      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
-      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
-      - SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
-    ports:
-      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9999"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    profiles:
-      - vpn
-    networks:
-      - internal
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
     restart: unless-stopped
-    network_mode: service:gluetun
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -192,12 +184,27 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - ${CONFIG_PATH:-./config}/qbittorrent:/config
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-    depends_on:
-      gluetun:
-        condition: service_healthy
-    profiles:
-      - vpn
+      - ${DATA_PATH:-./data}/torrents:/data/torrents
+    ports:
+      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
+    networks:
+      - internal
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/sabnzbd:/config
+      - ${DATA_PATH:-./data}/usenet:/data/usenet
+    ports:
+      - "127.0.0.1:${SABNZBD_PORT:-8081}:8080"
+    networks:
+      - internal
 
   # ═══════════════════════════════════════
   # INFRASTRUCTURE
@@ -285,10 +292,16 @@ services:
       start_period: 30s
     labels:
       - "traefik.enable=${DOMAIN:+true}"
-      - "traefik.http.routers.agent-api.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.agent-api.rule=Host(`api.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.agent-api.entrypoints=websecure"
       - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-api.middlewares=api-cors"
       - "traefik.http.services.agent-api.loadbalancer.server.port=8880"
+      # CORS middleware for frontend cross-origin requests
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowheaders=Content-Type,X-Api-Key,Authorization"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=https://app.${DOMAIN:-localhost}"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolmaxage=3600"
     networks:
       - internal
 
@@ -299,8 +312,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DATA_PATH:-./data}:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -314,7 +326,13 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
-      - VPN_ENABLED=${VPN_ENABLED:-false}
+      - TORRENT_ENABLED=${TORRENT_ENABLED:-true}
+      - USENET_ENABLED=${USENET_ENABLED:-false}
+      - SABNZBD_URL=http://sabnzbd:8080
+      - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
+      - QBT_URL=http://qbittorrent:8080
+      - QBT_USERNAME=admin
+      - QBT_PASSWORD=${QBT_PASSWORD:-}
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
       - SONARR_URL=http://sonarr:8989
@@ -340,8 +358,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
-      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
-      - ${MEDIA_PATH:-./data/media}:/data/media
+      - ${DATA_PATH:-./data}:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -383,6 +400,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
+      - ${CONFIG_PATH:-./config}/iptv:/data/iptv:ro
     depends_on:
       postgres:
         condition: service_healthy

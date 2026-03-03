@@ -1,8 +1,10 @@
 """Async Real-Debrid API client."""
+from __future__ import annotations
 
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 
@@ -163,17 +165,36 @@ class RealDebridClient:
         logger.info("Unrestricted link -> %s", download_url[:80])
         return download_url
 
-    async def download_file(self, url: str, dest_path: Path) -> None:
-        """Stream-download a file from the given URL to a local path."""
+    async def download_file(
+        self,
+        url: str,
+        dest_path: Path,
+        on_progress: Callable[[int, int], Any] | None = None,
+    ) -> None:
+        """Stream-download a file from the given URL to a local path.
+
+        Parameters
+        ----------
+        on_progress:
+            Optional callback(downloaded_bytes, total_bytes) called every ~256KB.
+            May be sync or async.
+        """
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info("Downloading %s -> %s", url[:80], dest_path)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as dl:
             async with dl.stream("GET", url) as response:
                 response.raise_for_status()
+                total = int(response.headers.get("content-length", 0))
+                downloaded = 0
                 with open(dest_path, "wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=1024 * 256):
                         f.write(chunk)
+                        downloaded += len(chunk)
+                        if on_progress and total > 0:
+                            result = on_progress(downloaded, total)
+                            if asyncio.iscoroutine(result):
+                                await result
 
         logger.info("Download complete: %s", dest_path)
 

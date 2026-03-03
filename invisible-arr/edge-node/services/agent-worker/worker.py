@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import uuid
 from dataclasses import asdict
@@ -23,8 +24,10 @@ from shared.database import get_session_factory
 from shared.models import Blacklist, Job, JobEvent, JobState, Prefs
 from shared.naming import movie_path, tv_path
 from shared.prowlarr_client import ProwlarrClient
+from shared.qbt_client import QBittorrentClient
 from shared.rd_client import RealDebridClient
-from shared.redis_client import enqueue_qc
+from shared.redis_client import enqueue_qc, set_download_progress, clear_download_progress
+from shared.sabnzbd_client import SABnzbdClient
 from shared.scoring import ParsedRelease, parse_release_title, score_candidate, select_best_candidate
 from shared.tmdb_client import TMDBClient
 
@@ -148,6 +151,35 @@ def get_year(job: Job) -> int:
     return datetime.utcnow().year
 
 
+def diagnose_failure(error: Exception, candidate: ParsedRelease | None = None) -> str:
+    """Map raw errors to actionable diagnostic messages."""
+    error_str = str(error).lower()
+
+    if "401" in error_str or "unauthorized" in error_str:
+        return "Authentication failed — check API token/credentials."
+    if "403" in error_str or "forbidden" in error_str:
+        return "Access denied — account may be expired or suspended."
+    if "429" in error_str or "rate limit" in error_str:
+        return "Rate limited by provider. Will retry next candidate."
+    if "timeout" in error_str or "timed out" in error_str:
+        size_info = f" File size: {candidate.size_gb:.1f}GB." if candidate and candidate.size_gb > 0 else ""
+        return f"Download timed out.{size_info} Source may be slow or unavailable."
+    if "no space" in error_str or "disk full" in error_str or "errno 28" in error_str:
+        return "Disk full — free space or increase storage allocation."
+    if "connection" in error_str and "refused" in error_str:
+        return "Could not connect to download service. Check if the service is running."
+    if "404" in error_str or "not found" in error_str:
+        return "File no longer available from source."
+    if "503" in error_str or "502" in error_str:
+        return "Download service temporarily unavailable."
+    if "magnet_error" in error_str:
+        return "Invalid or dead magnet link — torrent has no peers."
+    if "virus" in error_str:
+        return "File flagged as potentially harmful by provider."
+
+    return f"Unexpected error: {str(error)[:200]}"
+
+
 # ===========================================================================
 # Main pipeline
 # ===========================================================================
@@ -221,6 +253,7 @@ async def process_job(job_id: str) -> None:
         parsed.info_hash = result.get("infoHash", "")
         parsed.magnet_link = result.get("magnetUrl") or result.get("downloadUrl", "")
         parsed.indexer = result.get("indexer", "")
+        parsed.protocol = result.get("protocol", "torrent").lower()
 
         if await is_blacklisted(job.user_id, parsed.info_hash):
             logger.debug("Skipping blacklisted release: %s", parsed.title)
@@ -231,48 +264,23 @@ async def process_job(job_id: str) -> None:
     logger.info("Parsed %d candidates (%d blacklisted/skipped)", len(candidates), len(raw_results) - len(candidates))
 
     # ------------------------------------------------------------------
-    # 4. SELECT -- pick the best candidate
+    # 4. ACQUIRE with fallback -- try top candidates
     # ------------------------------------------------------------------
     # Adjust max size key based on media type
     size_key = "max_movie_size_gb" if job.media_type == "movie" else "max_episode_size_gb"
     scoring_prefs = {**prefs_dict, "max_movie_size_gb": prefs_dict.get(size_key, 15.0)}
 
-    best = select_best_candidate(candidates, scoring_prefs)
-    if best is None:
+    scored = [(c, score_candidate(c, scoring_prefs)) for c in candidates]
+    valid = sorted([(c, s) for c, s in scored if s > 0], key=lambda x: (-x[1], x[0].size_gb))
+
+    if not valid:
         await transition(
             job, JobState.FAILED,
             f"No valid candidates found (searched {len(raw_results)} results, {len(candidates)} after blacklist)",
         )
         return
 
-    best_score = score_candidate(best, scoring_prefs)
-    job.selected_candidate = asdict(best)
-    # Stash the resolved year for import naming
-    job.selected_candidate["year"] = year
-
-    now = datetime.utcnow()
-    factory = get_session_factory()
-    async with factory() as session:
-        await session.execute(
-            sa_update(Job).where(Job.id == job.id).values(
-                selected_candidate=job.selected_candidate, updated_at=now,
-            )
-        )
-        await session.commit()
-    job.updated_at = now
-
-    await transition(
-        job,
-        JobState.SELECTED,
-        f"Selected: {best.title} ({best.resolution}p, {best.source}, "
-        f"{best.size_gb:.1f}GB, score={best_score})",
-        metadata={"candidate": asdict(best), "score": best_score},
-    )
-
-    # ------------------------------------------------------------------
-    # 5. ACQUIRE -- download via RD or VPN
-    # ------------------------------------------------------------------
-    await acquire(job, best, prefs_dict)
+    await acquire_with_fallback(job, valid, prefs_dict, year)
 
 
 # ===========================================================================
@@ -280,27 +288,115 @@ async def process_job(job_id: str) -> None:
 # ===========================================================================
 
 
+async def acquire_with_fallback(
+    job: Job,
+    scored_candidates: list[tuple[ParsedRelease, int]],
+    prefs: dict[str, Any],
+    year: int,
+) -> None:
+    """Try up to 5 candidates, each through available acquisition methods."""
+    max_attempts = min(5, len(scored_candidates))
+
+    for i, (candidate, score) in enumerate(scored_candidates[:max_attempts]):
+        # Persist selected candidate
+        job.selected_candidate = asdict(candidate)
+        job.selected_candidate["year"] = year
+        now = datetime.utcnow()
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                sa_update(Job).where(Job.id == job.id).values(
+                    selected_candidate=job.selected_candidate, updated_at=now,
+                )
+            )
+            await session.commit()
+        job.updated_at = now
+
+        await transition(
+            job, JobState.SELECTED,
+            f"Candidate {i+1}/{max_attempts}: {candidate.title} "
+            f"({candidate.resolution}p, {candidate.source}, {candidate.size_gb:.1f}GB, score={score})",
+            metadata={"candidate": asdict(candidate), "score": score, "attempt": i + 1},
+        )
+
+        try:
+            await acquire(job, candidate, prefs)
+            return  # Success
+        except Exception as exc:
+            diagnosis = diagnose_failure(exc, candidate)
+            await transition(
+                job, JobState.ACQUIRING,
+                f"Candidate {i+1} failed: {diagnosis}",
+                metadata={"error": str(exc)[:500], "candidate_title": candidate.title},
+            )
+            if i < max_attempts - 1:
+                logger.info("Trying next candidate for job %s...", job.id)
+                continue
+
+    await transition(
+        job, JobState.FAILED,
+        f"All {max_attempts} candidates failed. Try again later or adjust quality settings.",
+    )
+
+
 async def acquire(
     job: Job,
     candidate: ParsedRelease,
     prefs: dict[str, Any],
 ) -> None:
-    """Route acquisition to the appropriate backend."""
+    """Try acquisition methods in priority order. Raises on all-method failure."""
     config = get_config()
+    errors: list[str] = []
 
+    # 1. Real-Debrid
     if config.rd_enabled and config.rd_api_token:
-        await acquire_via_rd(job, candidate)
-    elif config.vpn_enabled:
-        logger.warning("VPN torrent fallback not implemented in v1")
-        await transition(
-            job, JobState.FAILED,
-            "VPN torrent fallback not implemented in v1",
+        try:
+            if job.acquisition_mode == "stream":
+                await acquire_via_rd_stream(job, candidate)
+            else:
+                await acquire_via_rd(job, candidate)
+            await _set_acquisition_method(job, "rd")
+            return
+        except Exception as exc:
+            msg = f"RD: {diagnose_failure(exc, candidate)}"
+            errors.append(msg)
+            await transition(job, JobState.ACQUIRING, msg)
+
+    # 2. Usenet (only for Usenet protocol results from Prowlarr)
+    if config.usenet_enabled and config.sabnzbd_api_key:
+        if candidate.protocol == "usenet" and candidate.magnet_link:
+            try:
+                await acquire_via_usenet(job, candidate)
+                await _set_acquisition_method(job, "usenet")
+                return
+            except Exception as exc:
+                msg = f"Usenet: {diagnose_failure(exc, candidate)}"
+                errors.append(msg)
+                await transition(job, JobState.ACQUIRING, msg)
+
+    # 3. Torrent (qBittorrent with secure DNS)
+    if config.torrent_enabled and config.qbt_password:
+        try:
+            await acquire_via_torrent(job, candidate)
+            await _set_acquisition_method(job, "torrent")
+            return
+        except Exception as exc:
+            msg = f"Torrent: {diagnose_failure(exc, candidate)}"
+            errors.append(msg)
+            await transition(job, JobState.ACQUIRING, msg)
+
+    summary = "; ".join(errors) if errors else "No acquisition path available (all disabled)"
+    raise RuntimeError(summary)
+
+
+async def _set_acquisition_method(job: Job, method: str) -> None:
+    """Persist which acquisition method was used."""
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(acquisition_method=method)
         )
-    else:
-        await transition(
-            job, JobState.FAILED,
-            "No acquisition path available (RD disabled, VPN disabled)",
-        )
+        await session.commit()
 
 
 def _resolve_magnet(candidate: ParsedRelease) -> str:
@@ -336,7 +432,6 @@ async def _resolve_download_url(url: str) -> str:
         # Check response body for magnet link
         text = resp.text
         if "magnet:?" in text:
-            import re
             match = re.search(r'(magnet:\?[^\s"<]+)', text)
             if match:
                 return match.group(1)
@@ -349,7 +444,6 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
     config = get_config()
 
     async with RealDebridClient(config.rd_api_token) as rd:
-        # -- Resolve magnet link ---------------------------------------------
         magnet = _resolve_magnet(candidate)
 
         if not magnet.startswith("magnet:"):
@@ -357,17 +451,14 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
             try:
                 magnet = await _resolve_download_url(magnet)
             except Exception as exc:
-                await transition(job, JobState.FAILED, f"Failed to resolve download URL: {exc}")
-                return
+                raise RuntimeError(f"Failed to resolve download URL: {exc}") from exc
 
-        # -- Add magnet ------------------------------------------------------
         await transition(job, JobState.ACQUIRING, "Adding magnet to Real-Debrid")
 
         try:
             torrent_id = await rd.add_magnet(magnet)
         except Exception as exc:
-            await transition(job, JobState.FAILED, f"RD add_magnet failed: {exc}")
-            return
+            raise RuntimeError(f"RD add_magnet failed: {exc}") from exc
 
         # Persist the RD torrent ID
         job.rd_torrent_id = torrent_id
@@ -382,32 +473,27 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
             await session.commit()
         job.updated_at = now
 
-        # -- Select files ----------------------------------------------------
         try:
             await rd.select_files(torrent_id, "all")
         except Exception as exc:
-            await transition(job, JobState.FAILED, f"RD select_files failed: {exc}")
-            return
+            raise RuntimeError(f"RD select_files failed: {exc}") from exc
 
-        # -- Poll until cached/downloaded ------------------------------------
         await transition(job, JobState.ACQUIRING, "Waiting for Real-Debrid to cache/download")
 
         try:
             info = await rd.poll_until_ready(torrent_id, timeout=600)
         except Exception as exc:
-            await transition(job, JobState.FAILED, f"RD poll timed out or failed: {exc}")
-            return
+            raise RuntimeError(f"RD poll timed out or failed: {exc}") from exc
 
-        # -- Download each unrestricted link to staging ----------------------
+        # Download each unrestricted link to staging
         staging_dir = Path(config.downloads_path) / "rd" / str(job.id)
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         links: list[str] = info.get("links", [])
         if not links:
-            await transition(job, JobState.FAILED, "Real-Debrid returned no download links")
-            return
+            raise RuntimeError("Real-Debrid returned no download links")
 
-        for raw_link in links:
+        for idx, raw_link in enumerate(links):
             try:
                 download_url = await rd.unrestrict_link(raw_link)
             except Exception as exc:
@@ -424,15 +510,188 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
                 logger.warning("Path traversal detected for %s, skipping", filename)
                 continue
 
+            # Progress callback
+            last_pct = [0]
+
+            async def _on_progress(downloaded: int, total: int, _jid=str(job.id), _fn=filename, _idx=idx, _links=len(links)) -> None:
+                pct = int(downloaded / total * 100) if total > 0 else 0
+                if pct >= last_pct[0] + 5:
+                    last_pct[0] = pct
+                    await set_download_progress(_jid, pct, f"Downloading {_fn} ({_idx+1}/{_links})")
+
             try:
-                await rd.download_file(download_url, dest)
+                await rd.download_file(download_url, dest, on_progress=_on_progress)
                 logger.info("Downloaded %s -> %s", filename, dest)
             except Exception as exc:
                 logger.warning("Failed to download %s: %s", download_url, exc)
                 continue
 
-    # -- Import to media library ---------------------------------------------
+        await clear_download_progress(str(job.id))
+
+    # Import to media library
     await transition(job, JobState.IMPORTING, "Importing to media library")
+    await import_files(job, staging_dir)
+
+
+async def acquire_via_rd_stream(job: Job, candidate: ParsedRelease) -> None:
+    """RD streaming mode -- unrestrict links and create .strm files in Jellyfin library."""
+    config = get_config()
+
+    async with RealDebridClient(config.rd_api_token) as rd:
+        magnet = _resolve_magnet(candidate)
+
+        if not magnet.startswith("magnet:"):
+            await transition(job, JobState.ACQUIRING, "Resolving download URL to magnet")
+            magnet = await _resolve_download_url(magnet)
+
+        await transition(job, JobState.ACQUIRING, "Adding magnet to Real-Debrid (stream mode)")
+        torrent_id = await rd.add_magnet(magnet)
+
+        now = datetime.utcnow()
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                sa_update(Job).where(Job.id == job.id).values(
+                    rd_torrent_id=torrent_id, updated_at=now,
+                )
+            )
+            await session.commit()
+
+        await rd.select_files(torrent_id, "all")
+
+        await transition(job, JobState.ACQUIRING, "Waiting for Real-Debrid to cache (stream mode)")
+        info = await rd.poll_until_ready(torrent_id, timeout=600)
+
+        links = info.get("links", [])
+        if not links:
+            raise RuntimeError("Real-Debrid returned no download links")
+
+        streaming_urls = []
+        for raw_link in links:
+            url = await rd.unrestrict_link(raw_link)
+            streaming_urls.append(url)
+
+        now = datetime.utcnow()
+        async with factory() as session:
+            await session.execute(
+                sa_update(Job).where(Job.id == job.id).values(
+                    streaming_urls={"urls": streaming_urls},
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+
+    # Pick the primary video URL (first unrestricted link)
+    primary_url = streaming_urls[0] if streaming_urls else None
+    if not primary_url:
+        raise RuntimeError("No streaming URL available after unrestricting")
+
+    # Create .strm file in Jellyfin library
+    media_root = Path(config.media_path)
+    year = get_year(job)
+
+    if job.media_type == "movie":
+        rel = movie_path(job.title, year, ".strm")
+        strm_dest = media_root / "Movies" / rel
+    else:
+        season = job.season if job.season is not None else 1
+        episode = job.episode if job.episode is not None else 1
+        rel = tv_path(job.title, season, episode, ".strm")
+        strm_dest = media_root / "TV" / rel
+
+    # Path traversal check
+    if not strm_dest.resolve().is_relative_to(media_root.resolve()):
+        raise ValueError(f"Path traversal detected for {strm_dest}")
+
+    await asyncio.to_thread(strm_dest.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(strm_dest.write_text, primary_url, encoding="utf-8")
+    logger.info("Created .strm file: %s", strm_dest)
+
+    # Persist imported path
+    job.imported_path = str(strm_dest)
+    now = datetime.utcnow()
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(
+                imported_path=str(strm_dest), updated_at=now,
+            )
+        )
+        await session.commit()
+    job.updated_at = now
+
+    # Trigger Jellyfin library scan
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{config.jellyfin_url}/Library/Refresh")
+            resp.raise_for_status()
+            logger.info("Triggered Jellyfin library scan")
+    except Exception as exc:
+        logger.warning("Jellyfin library scan trigger failed (non-fatal): %s", exc)
+
+    await transition(
+        job, JobState.DONE,
+        f"Stream ready: {len(streaming_urls)} link(s), .strm created at {strm_dest.name}",
+        metadata={"streaming_url_count": len(streaming_urls), "strm_path": str(strm_dest)},
+    )
+
+
+async def acquire_via_usenet(job: Job, candidate: ParsedRelease) -> None:
+    """Download via SABnzbd Usenet client."""
+    config = get_config()
+
+    async with SABnzbdClient(config.sabnzbd_url, config.sabnzbd_api_key) as sab:
+        await transition(job, JobState.ACQUIRING, "Sending NZB to SABnzbd")
+
+        nzo_id = await sab.add_nzb_url(
+            candidate.magnet_link,
+            category="automedia",
+            name=candidate.title,
+        )
+
+        await transition(job, JobState.ACQUIRING, f"SABnzbd downloading (nzo={nzo_id})")
+        slot = await sab.poll_until_complete(nzo_id, timeout=3600)
+
+        storage_path = slot.get("storage", "")
+        if not storage_path:
+            raise RuntimeError("SABnzbd completed but reported no storage path")
+
+    staging_dir = Path(storage_path)
+    await transition(job, JobState.IMPORTING, "Importing Usenet download to media library")
+    await import_files(job, staging_dir)
+
+
+async def acquire_via_torrent(job: Job, candidate: ParsedRelease) -> None:
+    """Download via qBittorrent (with secure DNS)."""
+    config = get_config()
+
+    magnet = _resolve_magnet(candidate)
+    if not magnet.startswith("magnet:"):
+        await transition(job, JobState.ACQUIRING, "Resolving download URL to magnet")
+        magnet = await _resolve_download_url(magnet)
+
+    save_path = f"/data/torrents/{job.id}"
+
+    async with QBittorrentClient(config.qbt_url, config.qbt_username, config.qbt_password) as qbt:
+        await transition(job, JobState.ACQUIRING, "Adding magnet to qBittorrent")
+
+        await asyncio.sleep(3)  # qBittorrent needs a moment to register
+
+        info_hash = candidate.info_hash
+        if not info_hash:
+            match = re.search(r'btih:([a-fA-F0-9]+)', magnet)
+            if match:
+                info_hash = match.group(1)
+            else:
+                raise RuntimeError("Cannot determine info_hash for torrent polling")
+
+        await transition(job, JobState.ACQUIRING, "Waiting for qBittorrent download")
+        await qbt.poll_until_complete(info_hash, timeout=3600)
+
+        await qbt.delete_torrent(info_hash, delete_files=False)
+
+    staging_dir = Path(save_path)
+    await transition(job, JobState.IMPORTING, "Importing torrent download to media library")
     await import_files(job, staging_dir)
 
 

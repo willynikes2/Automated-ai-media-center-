@@ -18,9 +18,12 @@ if str(_app_root) not in sys.path:
 
 from shared.config import get_config  # noqa: E402
 from shared.database import init_db, get_engine, get_session_factory  # noqa: E402
-from shared.redis_client import dequeue_job, get_redis  # noqa: E402
+from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E402
 
 from worker import process_job  # noqa: E402
+
+MAX_RETRIES = 5
+RETRY_DELAYS = [30, 60, 120, 300, 600]  # seconds between retries
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,11 +88,16 @@ async def _run() -> None:
             logger.info("Job %s completed successfully", job_id)
         except Exception:
             logger.exception("Unhandled exception while processing job %s", job_id)
-            # Attempt to transition the job to FAILED so it is not stuck
             try:
                 await _fail_job(job_id)
             except Exception:
                 logger.exception("Could not transition job %s to FAILED", job_id)
+
+        # Check if the job failed and should be retried
+        try:
+            await _maybe_retry(job_id)
+        except Exception:
+            logger.exception("Error checking retry for job %s", job_id)
 
     # Shutdown cleanup -------------------------------------------------------
     logger.info("Shutting down agent-worker")
@@ -97,6 +105,58 @@ async def _run() -> None:
     engine = get_engine()
     await engine.dispose()
     logger.info("Resources released, goodbye")
+
+
+async def _maybe_retry(job_id: str) -> None:
+    """If a job is FAILED and under the retry limit, re-enqueue it after a delay."""
+    from shared.models import Job, JobState, JobEvent  # noqa: E402
+    from sqlalchemy import select
+    from sqlalchemy import update as sa_update
+    import uuid
+    from datetime import datetime
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(Job).where(Job.id == uuid.UUID(job_id))
+        )
+        job = result.scalar_one_or_none()
+        if job is None or job.state != JobState.FAILED:
+            return
+        if job.retry_count >= MAX_RETRIES:
+            logger.info("Job %s exceeded max retries (%d), staying FAILED", job_id, MAX_RETRIES)
+            return
+
+        new_count = job.retry_count + 1
+        delay = RETRY_DELAYS[min(new_count - 1, len(RETRY_DELAYS) - 1)]
+
+        # Reset to CREATED and bump retry count
+        now = datetime.utcnow()
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(
+                state=JobState.CREATED.value,
+                retry_count=new_count,
+                updated_at=now,
+            )
+        )
+        event = JobEvent(
+            job_id=job.id,
+            state=JobState.CREATED.value,
+            message=f"Auto-retry #{new_count}/{MAX_RETRIES} (waiting {delay}s)",
+            created_at=now,
+        )
+        session.add(event)
+        await session.commit()
+
+    logger.info("Job %s: scheduling retry #%d in %ds", job_id, new_count, delay)
+    await asyncio.sleep(delay)
+
+    if _shutdown_event.is_set():
+        logger.info("Shutdown requested, skipping retry for job %s", job_id)
+        return
+
+    await enqueue_job(job_id)
+    logger.info("Job %s re-enqueued for retry #%d", job_id, new_count)
 
 
 async def _fail_job(job_id: str) -> None:

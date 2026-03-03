@@ -174,7 +174,7 @@ async def get_epg(
         assert source.epg_url is not None
         headers = source.headers_json or {}
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
                 resp = await client.get(source.epg_url, headers=headers)
                 resp.raise_for_status()
                 raw_epg = resp.text

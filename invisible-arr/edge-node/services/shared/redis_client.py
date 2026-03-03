@@ -114,3 +114,35 @@ async def dequeue_qc(timeout: int = 0) -> str | None:
     _queue_name, job_id = result
     logger.info("Dequeued QC job %s", job_id)
     return job_id
+
+
+# ---------------------------------------------------------------------------
+# Download progress tracking
+# ---------------------------------------------------------------------------
+
+_PROGRESS_PREFIX = "invisiblearr:progress:"
+_PROGRESS_TTL = 3600  # 1 hour
+
+
+async def set_download_progress(job_id: str, percent: int, detail: str = "") -> None:
+    """Store download progress for a job."""
+    r = await get_redis()
+    key = f"{_PROGRESS_PREFIX}{job_id}"
+    await _safe_redis_op(r.hset(key, mapping={"percent": percent, "detail": detail}))
+    await _safe_redis_op(r.expire(key, _PROGRESS_TTL))
+
+
+async def get_download_progress(job_id: str) -> dict | None:
+    """Get download progress for a job. Returns None if no progress tracked."""
+    r = await get_redis()
+    key = f"{_PROGRESS_PREFIX}{job_id}"
+    data = await _safe_redis_op(r.hgetall(key))
+    if not data:
+        return None
+    return {"percent": int(data.get("percent", 0)), "detail": data.get("detail", "")}
+
+
+async def clear_download_progress(job_id: str) -> None:
+    """Remove progress tracking for a completed job."""
+    r = await get_redis()
+    await _safe_redis_op(r.delete(f"{_PROGRESS_PREFIX}{job_id}"))
