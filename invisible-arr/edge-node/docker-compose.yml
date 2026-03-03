@@ -67,6 +67,26 @@ services:
     networks:
       - internal
 
+  frontend:
+    build:
+      context: ./services/frontend
+      args:
+        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN:-localhost}
+        - NEXT_PUBLIC_API_KEY=${API_KEY:-}
+        - NEXT_PUBLIC_TMDB_API_KEY=${TMDB_API_KEY:-}
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    networks:
+      - internal
+
   seerr:
     image: ghcr.io/seerr-team/seerr:latest
     container_name: seerr
