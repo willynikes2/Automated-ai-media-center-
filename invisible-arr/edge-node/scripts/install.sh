@@ -53,6 +53,11 @@ if [ ! -f .env ]; then
     PG_PASS=$(openssl rand -hex 16)
     sed -i "s/POSTGRES_PASSWORD=CHANGEME_GENERATE_THIS/POSTGRES_PASSWORD=${PG_PASS}/" .env
     info "Generated random Postgres password."
+
+    # Generate a random Redis password
+    REDIS_PASS=$(openssl rand -hex 16)
+    sed -i "s/REDIS_PASSWORD=CHANGEME_GENERATE_THIS/REDIS_PASSWORD=${REDIS_PASS}/" .env
+    info "Generated random Redis password."
 else
     info ".env already exists, skipping generation."
 fi
@@ -62,6 +67,18 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
+
+# ---------------------------------------------------------------------------
+# Detect Docker API version and write to .env
+# ---------------------------------------------------------------------------
+
+DETECTED_API_VERSION=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || echo "1.44")
+info "Detected Docker API version: ${DETECTED_API_VERSION}"
+if grep -q '^DOCKER_API_VERSION=' .env; then
+    sed -i "s|^DOCKER_API_VERSION=.*|DOCKER_API_VERSION=${DETECTED_API_VERSION}|" .env
+else
+    echo "DOCKER_API_VERSION=${DETECTED_API_VERSION}" >> .env
+fi
 
 # ---------------------------------------------------------------------------
 # Interactive prompts
@@ -148,6 +165,16 @@ done
 
 info "Directories created."
 
+# Traefik requires acme.json to exist with strict permissions before starting
+if [ ! -f config/traefik/acme.json ]; then
+    touch config/traefik/acme.json
+    chmod 600 config/traefik/acme.json
+    info "Created config/traefik/acme.json with permissions 600."
+else
+    chmod 600 config/traefik/acme.json
+    info "config/traefik/acme.json already exists, ensured permissions 600."
+fi
+
 # ---------------------------------------------------------------------------
 # Build COMPOSE_PROFILES and start
 # ---------------------------------------------------------------------------
@@ -175,6 +202,32 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Wait for core services to be healthy
+# ---------------------------------------------------------------------------
+
+info "Waiting for core services to become healthy..."
+
+wait_healthy() {
+    local container="$1"
+    local max_attempts=30
+    local attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "missing")
+        if [ "$status" = "healthy" ]; then
+            info "${container} is healthy."
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    warn "${container} did not become healthy after $((max_attempts * 2))s. Check: docker logs ${container}"
+    return 1
+}
+
+wait_healthy postgres || true
+wait_healthy redis || true
+
+# ---------------------------------------------------------------------------
 # Print access URLs
 # ---------------------------------------------------------------------------
 
@@ -189,15 +242,21 @@ else
     BASE="http://localhost"
 fi
 
-JELLYFIN_PORT_VAL=$(grep '^JELLYFIN_PORT=' .env | cut -d'=' -f2)
-SEERR_PORT_VAL=$(grep '^SEERR_PORT=' .env | cut -d'=' -f2)
-API_PORT_VAL=$(grep '^AGENT_API_PORT=' .env | cut -d'=' -f2)
+# Re-source .env to pick up all generated values
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+
+JELLYFIN_PORT_VAL="${JELLYFIN_PORT:-8096}"
+SEERR_PORT_VAL="${SEERR_PORT:-5055}"
+API_PORT_VAL="${AGENT_API_PORT:-8880}"
 
 info "Access URLs:"
-echo "  Jellyfin:   http://localhost:${JELLYFIN_PORT_VAL:-8096}"
-echo "  Seerr:      http://localhost:${SEERR_PORT_VAL:-5055}"
-echo "  Agent API:  http://localhost:${API_PORT_VAL:-8880}"
-echo "  Health:     http://localhost:${API_PORT_VAL:-8880}/health"
+echo "  Jellyfin:   http://localhost:${JELLYFIN_PORT_VAL}"
+echo "  Seerr:      http://localhost:${SEERR_PORT_VAL}"
+echo "  Agent API:  http://localhost:${API_PORT_VAL}"
+echo "  Health:     http://localhost:${API_PORT_VAL}/health"
 
 if [ -n "${DOMAIN_VAL}" ]; then
     echo ""
@@ -208,13 +267,13 @@ if [ -n "${DOMAIN_VAL}" ]; then
 fi
 
 if [ "${VPN_ENABLED}" = "true" ]; then
-    QB_PORT=$(grep '^QBITTORRENT_PORT=' .env | cut -d'=' -f2)
-    echo "  qBittorrent: http://localhost:${QB_PORT:-8080}"
+    QB_PORT="${QBITTORRENT_PORT:-8080}"
+    echo "  qBittorrent: http://localhost:${QB_PORT}"
 fi
 
 if [ "${IPTV_ENABLED}" = "true" ]; then
-    IPTV_PORT=$(grep '^IPTV_GATEWAY_PORT=' .env | cut -d'=' -f2)
-    echo "  IPTV Gateway: http://localhost:${IPTV_PORT:-8881}"
+    IPTV_PORT="${IPTV_GATEWAY_PORT:-8881}"
+    echo "  IPTV Gateway: http://localhost:${IPTV_PORT}"
 fi
 
 echo ""

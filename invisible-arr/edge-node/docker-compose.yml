@@ -3,12 +3,25 @@ services:
   # USER-FACING
   # ═══════════════════════════════════════
 
+  socket-proxy:
+    image: nginx:1-alpine
+    container_name: socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - internal
+
   traefik:
     image: traefik:v3.3
     container_name: traefik
     restart: unless-stopped
+    depends_on:
+      - socket-proxy
     command:
       - "--providers.docker=true"
+      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
@@ -25,7 +38,6 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${CONFIG_PATH:-./config}/traefik:/etc/traefik
     networks:
       - internal
@@ -42,7 +54,7 @@ services:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
       - ${MEDIA_PATH:-./data/media}:/data/media:ro
     ports:
-      - "${JELLYFIN_PORT:-8096}:8096"
+      - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
     labels:
       - "traefik.enable=${DOMAIN:+true}"
       - "traefik.http.routers.jellyfin.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/jellyfin`)"
@@ -64,7 +76,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/seerr:/app/config
     ports:
-      - "${SEERR_PORT:-5055}:5055"
+      - "127.0.0.1:${SEERR_PORT:-5055}:5055"
     depends_on:
       - jellyfin
     labels:
@@ -157,7 +169,7 @@ services:
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
       - SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
     ports:
-      - "${QBITTORRENT_PORT:-8080}:8080"
+      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9999"]
       interval: 5s
@@ -213,9 +225,11 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-}
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -242,7 +256,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
@@ -295,7 +309,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
@@ -334,7 +348,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - MEDIA_PATH=/data/media
       - DOWNLOADS_PATH=/data/downloads
     networks:
@@ -355,7 +369,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - MEDIA_PATH=/data/media
       - JELLYFIN_URL=http://jellyfin:8096
     networks:
@@ -375,7 +389,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
     ports:
       - "127.0.0.1:${IPTV_GATEWAY_PORT:-8881}:8881"
     profiles:
