@@ -1,0 +1,34 @@
+import { JobList } from '@/components/jobs/JobList';
+import { useJobs } from '@/hooks/useJobs';
+import { useState } from 'react';
+import { Select } from '@/components/ui/Select';
+
+export function AllJobs() {
+  const [stateFilter, setStateFilter] = useState('');
+  const { data: jobs, isLoading } = useJobs({ state: stateFilter || undefined, limit: 100 });
+
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-4">
+        <Select
+          value={stateFilter}
+          onChange={(e) => setStateFilter(e.target.value)}
+          options={[
+            { value: '', label: 'All States' },
+            { value: 'CREATED', label: 'Created' },
+            { value: 'RESOLVING', label: 'Resolving' },
+            { value: 'SEARCHING', label: 'Searching' },
+            { value: 'ACQUIRING', label: 'Acquiring' },
+            { value: 'DONE', label: 'Done' },
+            { value: 'FAILED', label: 'Failed' },
+          ]}
+        />
+      </div>
+      {isLoading ? (
+        <p className="text-sm text-text-secondary">Loading...</p>
+      ) : (
+        <JobList jobs={jobs ?? []} emptyMessage="No jobs found" />
+      )}
+    </div>
+  );
+}

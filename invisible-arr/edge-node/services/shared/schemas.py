@@ -21,6 +21,8 @@ class RequestCreate(BaseModel):
     media_type: Literal["movie", "tv"]
     season: int | None = None
     episode: int | None = None
+    preferred_resolution: int | None = Field(None, ge=240, le=8640)
+    preferred_downloader: Literal["rd", "torrent"] | None = None
 
 
 class PrefsUpdate(BaseModel):

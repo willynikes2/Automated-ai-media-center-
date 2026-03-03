@@ -43,7 +43,8 @@ services:
       - internal
 
   jellyfin:
-    image: jellyfin/jellyfin:latest
+    build:
+      context: ./services/jellyfin
     container_name: jellyfin
     restart: unless-stopped
     environment:
@@ -71,20 +72,19 @@ services:
   frontend:
     build:
       context: ./services/frontend
-      args:
-        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN:-localhost}
-        - NEXT_PUBLIC_API_KEY=${API_KEY:-}
-        - NEXT_PUBLIC_TMDB_API_KEY=${TMDB_API_KEY:-}
-    container_name: frontend
+    container_name: automedia-frontend
     restart: unless-stopped
+    depends_on:
+      - agent-api
+      - jellyfin
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
     labels:
       - "traefik.enable=${DOMAIN:+true}"
       - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
     networks:
       - internal
 

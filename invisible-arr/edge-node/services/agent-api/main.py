@@ -25,7 +25,7 @@ from shared.database import init_db, get_engine, get_session_factory  # noqa: E4
 from shared.models import User  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 
-from routers import health, requests, jobs, prefs, webhooks  # noqa: E402
+from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,6 +111,9 @@ app.include_router(requests.router, prefix="/v1", tags=["requests"])
 app.include_router(jobs.router, prefix="/v1", tags=["jobs"])
 app.include_router(prefs.router, prefix="/v1", tags=["prefs"])
 app.include_router(webhooks.router, prefix="/v1", tags=["webhooks"])
+app.include_router(auth.router, prefix="/v1", tags=["auth"])
+app.include_router(tmdb.router, prefix="/v1", tags=["tmdb"])
+app.include_router(search.router, prefix="/v1", tags=["search"])
 
 
 # ---------------------------------------------------------------------------
