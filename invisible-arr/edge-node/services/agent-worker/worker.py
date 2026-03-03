@@ -11,11 +11,11 @@ import logging
 import shutil
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from shared.config import get_config
 from shared.database import get_session_factory
@@ -96,26 +96,29 @@ async def transition(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Persist a state transition: update the job row and append a JobEvent."""
+    now = datetime.utcnow()
     factory = get_session_factory()
     async with factory() as session:
-        # Re-attach and update
-        job.state = new_state
-        job.updated_at = datetime.now(timezone.utc)
-        merged_job = await session.merge(job)
+        # Direct update avoids merge cascade issues with events relationship
+        await session.execute(
+            sa_update(Job)
+            .where(Job.id == job.id)
+            .values(state=new_state.value, updated_at=now)
+        )
 
         event = JobEvent(
-            job_id=merged_job.id,
+            job_id=job.id,
             state=new_state.value,
             message=message,
             metadata_json=metadata,
-            created_at=datetime.now(timezone.utc),
+            created_at=now,
         )
         session.add(event)
         await session.commit()
 
         # Keep the detached object in sync
         job.state = new_state
-        job.updated_at = merged_job.updated_at
+        job.updated_at = now
 
     logger.info("Job %s -> %s: %s", job.id, new_state.value, message)
 
@@ -141,7 +144,7 @@ def get_year(job: Job) -> int:
         year = job.selected_candidate.get("year")
         if year:
             return int(year)
-    return datetime.now(timezone.utc).year
+    return datetime.utcnow().year
 
 
 # ===========================================================================
@@ -174,13 +177,16 @@ async def process_job(job_id: str) -> None:
     # Persist resolved identity back onto the job
     job.tmdb_id = tmdb_id
     job.title = canonical_title
+    now = datetime.utcnow()
     factory = get_session_factory()
     async with factory() as session:
-        merged = await session.merge(job)
-        merged.tmdb_id = tmdb_id
-        merged.title = canonical_title
-        merged.updated_at = datetime.now(timezone.utc)
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(
+                tmdb_id=tmdb_id, title=canonical_title, updated_at=now,
+            )
+        )
         await session.commit()
+    job.updated_at = now
 
     logger.info("Resolved '%s' -> TMDB %d '%s' (%d)", job.query or job.title, tmdb_id, canonical_title, year)
 
@@ -243,12 +249,16 @@ async def process_job(job_id: str) -> None:
     # Stash the resolved year for import naming
     job.selected_candidate["year"] = year
 
+    now = datetime.utcnow()
     factory = get_session_factory()
     async with factory() as session:
-        merged = await session.merge(job)
-        merged.selected_candidate = job.selected_candidate
-        merged.updated_at = datetime.now(timezone.utc)
+        await session.execute(
+            sa_update(Job).where(Job.id == job.id).values(
+                selected_candidate=job.selected_candidate, updated_at=now,
+            )
+        )
         await session.commit()
+    job.updated_at = now
 
     await transition(
         job,
@@ -308,12 +318,16 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
 
         # Persist the RD torrent ID
         job.rd_torrent_id = torrent_id
+        now = datetime.utcnow()
         factory = get_session_factory()
         async with factory() as session:
-            merged = await session.merge(job)
-            merged.rd_torrent_id = torrent_id
-            merged.updated_at = datetime.now(timezone.utc)
+            await session.execute(
+                sa_update(Job).where(Job.id == job.id).values(
+                    rd_torrent_id=torrent_id, updated_at=now,
+                )
+            )
             await session.commit()
+        job.updated_at = now
 
         # -- Select files ----------------------------------------------------
         try:
@@ -413,12 +427,16 @@ async def import_files(job: Job, staging_dir: Path) -> None:
     # Persist the imported path on the job
     if imported_path is not None:
         job.imported_path = imported_path
+        now = datetime.utcnow()
         factory = get_session_factory()
         async with factory() as session:
-            merged = await session.merge(job)
-            merged.imported_path = imported_path
-            merged.updated_at = datetime.now(timezone.utc)
+            await session.execute(
+                sa_update(Job).where(Job.id == job.id).values(
+                    imported_path=imported_path, updated_at=now,
+                )
+            )
             await session.commit()
+        job.updated_at = now
 
     # Clean up staging directory
     await asyncio.to_thread(shutil.rmtree, staging_dir, True)

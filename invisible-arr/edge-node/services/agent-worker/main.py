@@ -104,7 +104,7 @@ async def _fail_job(job_id: str) -> None:
     from shared.models import Job, JobState, JobEvent  # noqa: E402
     from sqlalchemy import select
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     factory = get_session_factory()
     async with factory() as session:
@@ -117,13 +117,13 @@ async def _fail_job(job_id: str) -> None:
             return
 
         job.state = JobState.FAILED
-        job.updated_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.utcnow()
 
         event = JobEvent(
             job_id=job.id,
             state=JobState.FAILED.value,
             message="Unhandled exception during processing",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.utcnow(),
         )
         session.add(event)
         await session.commit()

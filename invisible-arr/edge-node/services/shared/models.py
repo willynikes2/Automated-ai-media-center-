@@ -3,7 +3,7 @@
 import enum
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import JSON, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -93,7 +93,7 @@ class Job(Base):
     query: Mapped[str | None] = mapped_column(String(500), default=None)
     season: Mapped[int | None] = mapped_column(default=None)
     episode: Mapped[int | None] = mapped_column(default=None)
-    state: Mapped[JobState] = mapped_column(default=JobState.CREATED)
+    state: Mapped[str] = mapped_column(String(50), default=JobState.CREATED)
     selected_candidate: Mapped[dict | None] = mapped_column(type_=JSON, default=None)
     rd_torrent_id: Mapped[str | None] = mapped_column(String(255), default=None)
     imported_path: Mapped[str | None] = mapped_column(String(1000), default=None)
