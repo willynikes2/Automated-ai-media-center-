@@ -41,7 +41,7 @@ export function AccountSettings() {
 
       <div>
         <label className="text-xs text-text-tertiary uppercase tracking-wider">Role</label>
-        <p className="text-sm mt-1">{user?.isAdmin ? 'Administrator' : 'User'}</p>
+        <p className="text-sm mt-1 capitalize">{user?.role ?? 'user'}</p>
       </div>
     </Card>
   );

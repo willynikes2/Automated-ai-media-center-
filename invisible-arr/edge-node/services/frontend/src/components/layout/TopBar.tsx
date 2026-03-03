@@ -3,6 +3,14 @@ import { Search, Menu, Bell } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useState } from 'react';
+import type { UserTier } from '@/stores/authStore';
+
+const TIER_COLORS: Record<UserTier, string> = {
+  starter: 'bg-gray-500/20 text-gray-400',
+  pro: 'bg-indigo-500/20 text-indigo-400',
+  family: 'bg-emerald-500/20 text-emerald-400',
+  power: 'bg-violet-500/20 text-violet-400',
+};
 
 export function TopBar() {
   const user = useAuthStore((s) => s.user);
@@ -42,11 +50,18 @@ export function TopBar() {
           <Bell className="h-5 w-5" />
         </button>
 
-        {/* Avatar */}
-        <div className="h-8 w-8 rounded-full bg-accent/20 flex items-center justify-center">
-          <span className="text-xs font-bold text-accent">
-            {user?.name?.[0]?.toUpperCase() ?? '?'}
-          </span>
+        {/* Tier badge + Avatar */}
+        <div className="flex items-center gap-2">
+          {user?.tier && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize hidden sm:inline-block ${TIER_COLORS[user.tier] ?? TIER_COLORS.starter}`}>
+              {user.tier}
+            </span>
+          )}
+          <div className="h-8 w-8 rounded-full bg-accent/20 flex items-center justify-center">
+            <span className="text-xs font-bold text-accent">
+              {user?.name?.[0]?.toUpperCase() ?? '?'}
+            </span>
+          </div>
         </div>
       </div>
     </header>

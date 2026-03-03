@@ -1,9 +1,10 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
-import { ProtectedRoute, AdminRoute } from '@/components/layout/ProtectedRoute';
+import { ProtectedRoute, AdminRoute, ResellerRoute } from '@/components/layout/ProtectedRoute';
 import { ToastContainer } from '@/components/ui/Toast';
 import { LoginPage } from '@/pages/LoginPage';
+import { RegisterPage } from '@/pages/RegisterPage';
 import { DiscoverPage } from '@/pages/DiscoverPage';
 import { SearchPage } from '@/pages/SearchPage';
 import { MediaDetailPage } from '@/pages/MediaDetailPage';
@@ -15,6 +16,8 @@ import { ActivityPage } from '@/pages/ActivityPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { QuickConnectPage } from '@/pages/QuickConnectPage';
 import { LibraryItemPage } from '@/pages/LibraryItemPage';
+import { SetupPage } from '@/pages/SetupPage';
+import { ResellerPage } from '@/pages/ResellerPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,7 +36,11 @@ export default function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/quick-connect" element={<QuickConnectPage />} />
+
+          {/* Protected standalone routes (no AppShell) */}
+          <Route path="/setup" element={<ProtectedRoute><SetupPage /></ProtectedRoute>} />
 
           {/* Protected routes */}
           <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
@@ -48,6 +55,7 @@ export default function App() {
             <Route path="iptv" element={<IPTVPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+            <Route path="reseller" element={<ResellerRoute><ResellerPage /></ResellerRoute>} />
           </Route>
         </Routes>
         <ToastContainer />

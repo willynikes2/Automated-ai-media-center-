@@ -1,6 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
-import { getSystemHealth, getJellyfinServerInfo, getJellyfinUsers, getJellyfinLibraryCounts } from '@/api/admin';
-import { getRDStatus, getVPNStatus } from '@/api/realdebrid';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  getSystemHealth,
+  getJellyfinServerInfo,
+  getJellyfinLibraryCounts,
+  getAdminStats,
+  getAdminUsers,
+  updateAdminUser,
+  deactivateUser,
+  getInvites,
+  createInvite,
+  getRDStatus,
+  getAllJobs,
+} from '@/api/admin';
+import type { AdminUserUpdate, InviteCreate } from '@/api/admin';
+
+// ── System ──────────────────────────────────────────────────
 
 export function useSystemHealth() {
   return useQuery({
@@ -18,14 +32,6 @@ export function useJellyfinInfo() {
   });
 }
 
-export function useJellyfinUsers() {
-  return useQuery({
-    queryKey: ['jellyfin-users'],
-    queryFn: getJellyfinUsers,
-    staleTime: 30_000,
-  });
-}
-
 export function useLibraryCounts() {
   return useQuery({
     queryKey: ['library-counts'],
@@ -33,6 +39,62 @@ export function useLibraryCounts() {
     staleTime: 60_000,
   });
 }
+
+// ── Admin stats ─────────────────────────────────────────────
+
+export function useAdminStats() {
+  return useQuery({
+    queryKey: ['admin-stats'],
+    queryFn: getAdminStats,
+    refetchInterval: 30_000,
+  });
+}
+
+// ── Admin users ─────────────────────────────────────────────
+
+export function useAdminUsers() {
+  return useQuery({
+    queryKey: ['admin-users'],
+    queryFn: getAdminUsers,
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: AdminUserUpdate }) => updateAdminUser(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
+  });
+}
+
+export function useDeactivateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deactivateUser(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
+  });
+}
+
+// ── Invites ─────────────────────────────────────────────────
+
+export function useInvites() {
+  return useQuery({
+    queryKey: ['admin-invites'],
+    queryFn: getInvites,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: InviteCreate) => createInvite(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-invites'] }),
+  });
+}
+
+// ── Real-Debrid ─────────────────────────────────────────────
 
 export function useRDStatus() {
   return useQuery({
@@ -42,10 +104,12 @@ export function useRDStatus() {
   });
 }
 
-export function useVPNStatus() {
+// ── Jobs (admin) ────────────────────────────────────────────
+
+export function useAllJobs(params: { state?: string; limit?: number } = {}) {
   return useQuery({
-    queryKey: ['vpn-status'],
-    queryFn: getVPNStatus,
-    staleTime: 60_000,
+    queryKey: ['admin-jobs', params],
+    queryFn: () => getAllJobs(params),
+    refetchInterval: 15_000,
   });
 }

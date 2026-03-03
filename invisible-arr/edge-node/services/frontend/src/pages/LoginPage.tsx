@@ -3,16 +3,32 @@ import { Link } from 'react-router-dom';
 import { Zap } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { useLogin } from '@/hooks/useAuth';
+import { useEmailLogin, useJellyfinLogin } from '@/hooks/useAuth';
+
+type LoginTab = 'email' | 'jellyfin';
 
 export function LoginPage() {
+  const [activeTab, setActiveTab] = useState<LoginTab>('email');
+
+  // Email form state
+  const [email, setEmail] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const emailLogin = useEmailLogin();
+
+  // Jellyfin form state
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const loginMutation = useLogin();
+  const [jellyfinPassword, setJellyfinPassword] = useState('');
+  const jellyfinLogin = useJellyfinLogin();
+
+  const activeMutation = activeTab === 'email' ? emailLogin : jellyfinLogin;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    loginMutation.mutate({ username, password });
+    if (activeTab === 'email') {
+      emailLogin.mutate({ email, password: emailPassword });
+    } else {
+      jellyfinLogin.mutate({ username, password: jellyfinPassword });
+    }
   };
 
   return (
@@ -34,47 +50,96 @@ export function LoginPage() {
           <h1 className="text-2xl font-bold tracking-tight">AutoMedia</h1>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label="Username"
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Your Jellyfin username"
-            autoComplete="username"
-            autoFocus
-          />
-          <Input
-            label="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Your Jellyfin password"
-            autoComplete="current-password"
-          />
+        {/* Tabs */}
+        <div className="flex border-b border-white/10 mb-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab('email')}
+            className={`flex-1 pb-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === 'email'
+                ? 'text-accent border-accent'
+                : 'text-text-tertiary border-transparent hover:text-text-secondary'
+            }`}
+          >
+            Email
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('jellyfin')}
+            className={`flex-1 pb-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === 'jellyfin'
+                ? 'text-accent border-accent'
+                : 'text-text-tertiary border-transparent hover:text-text-secondary'
+            }`}
+          >
+            Jellyfin
+          </button>
+        </div>
 
-          {loginMutation.isError && (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {activeTab === 'email' ? (
+            <>
+              <Input
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                autoFocus
+              />
+              <Input
+                label="Password"
+                type="password"
+                value={emailPassword}
+                onChange={(e) => setEmailPassword(e.target.value)}
+                placeholder="Your password"
+                autoComplete="current-password"
+              />
+            </>
+          ) : (
+            <>
+              <Input
+                label="Username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Your Jellyfin username"
+                autoComplete="username"
+                autoFocus
+              />
+              <Input
+                label="Password"
+                type="password"
+                value={jellyfinPassword}
+                onChange={(e) => setJellyfinPassword(e.target.value)}
+                placeholder="Your Jellyfin password"
+                autoComplete="current-password"
+              />
+            </>
+          )}
+
+          {activeMutation.isError && (
             <p className="text-sm text-status-failed">
-              {(loginMutation.error as any)?.response?.status === 401
-                ? 'Invalid username or password'
+              {(activeMutation.error as any)?.response?.status === 401
+                ? 'Invalid credentials'
                 : 'Login failed. Check your connection.'}
             </p>
           )}
 
-          <Button type="submit" className="w-full" size="lg" loading={loginMutation.isPending}>
+          <Button type="submit" className="w-full" size="lg" loading={activeMutation.isPending}>
             Sign In
           </Button>
         </form>
 
-        <div className="mt-6 text-center">
-          <Link to="/quick-connect" className="text-sm text-accent hover:text-accent-hover transition-colors">
+        <div className="mt-6 text-center space-y-3">
+          <Link to="/quick-connect" className="block text-sm text-accent hover:text-accent-hover transition-colors">
             Set up a device with Quick Connect
           </Link>
+          <Link to="/register" className="block text-sm text-text-secondary hover:text-text-primary transition-colors">
+            Don't have an account? <span className="text-accent hover:text-accent-hover">Register with invite code</span>
+          </Link>
         </div>
-
-        <p className="mt-4 text-xs text-text-tertiary text-center">
-          Sign in with your Jellyfin credentials
-        </p>
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ import { FullSpinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { toast } from '@/components/ui/Toast';
-import { ArrowLeft, Play, Trash2, RefreshCw, HardDrive } from 'lucide-react';
+import { ArrowLeft, Play, Trash2, RefreshCw, HardDrive, Star, Clock } from 'lucide-react';
 import { useState } from 'react';
 
 function ResolutionBadge({ width }: { width: number }) {
@@ -25,12 +25,30 @@ function ResolutionBadge({ width }: { width: number }) {
   );
 }
 
+function GenrePill({ genre }: { genre: string }) {
+  return (
+    <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-text-secondary border border-white/10">
+      {genre}
+    </span>
+  );
+}
+
+function FileDetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between py-2 border-b border-white/5 last:border-b-0">
+      <span className="text-xs text-text-tertiary">{label}</span>
+      <span className="text-xs text-text-secondary font-medium">{value}</span>
+    </div>
+  );
+}
+
 export function LibraryItemPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: item, isLoading } = useJellyfinItem(id!);
   const deleteMutation = useDeleteJellyfinItem();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [overviewExpanded, setOverviewExpanded] = useState(false);
 
   if (isLoading) return <FullSpinner />;
   if (!item) {
@@ -46,6 +64,8 @@ export function LibraryItemPage() {
 
   const mediaSource = item.MediaSources?.[0];
   const videoStream = mediaSource?.MediaStreams?.find((s: any) => s.Type === 'Video');
+  const audioStream = mediaSource?.MediaStreams?.find((s: any) => s.Type === 'Audio');
+  const subtitleStream = mediaSource?.MediaStreams?.find((s: any) => s.Type === 'Subtitle');
   const sizeBytes = mediaSource?.Size ?? 0;
   const sizeGb = sizeBytes > 0 ? (sizeBytes / (1024 ** 3)).toFixed(1) : null;
   const resolution = videoStream?.Width ?? 0;
@@ -53,8 +73,9 @@ export function LibraryItemPage() {
   const backdropTag = item.BackdropImageTags?.[0];
   const poster = imgTag ? `/jellyfin/Items/${item.Id}/Images/Primary?maxHeight=600&tag=${imgTag}` : null;
   const backdrop = backdropTag ? `/jellyfin/Items/${item.Id}/Images/Backdrop?maxWidth=1280&tag=${backdropTag}` : null;
-  const mediaType = item.Type === 'Movie' ? 'movie' : 'tv';
   const title = item.Name ?? 'Unknown';
+  const runtimeMinutes = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10_000_000 / 60) : null;
+  const overviewIsLong = (item.Overview?.length ?? 0) > 300;
 
   const handleDelete = () => {
     deleteMutation.mutate(item.Id, {
@@ -79,24 +100,25 @@ export function LibraryItemPage() {
     <div className="pb-6">
       {/* Backdrop */}
       {backdrop && (
-        <div className="relative h-48 md:h-72 overflow-hidden">
+        <div className="relative h-[300px] md:h-[400px] overflow-hidden">
           <img src={backdrop} alt="" className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-t from-bg-primary via-bg-primary/60 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-r from-bg-primary/80 to-transparent" />
         </div>
       )}
 
-      <div className="px-4 md:px-8 -mt-20 relative z-10">
+      <div className="px-4 md:px-8 -mt-24 relative z-10">
         <button onClick={() => navigate('/library')} className="mb-4 text-text-secondary hover:text-text-primary text-sm flex items-center gap-1">
           <ArrowLeft className="h-4 w-4" /> Library
         </button>
 
         <div className="flex gap-6 flex-col md:flex-row">
           {/* Poster */}
-          <div className="shrink-0 w-40 md:w-52">
+          <div className="shrink-0 w-44 md:w-56">
             {poster ? (
-              <img src={poster} alt={title} className="w-full rounded-xl shadow-lg" />
+              <img src={poster} alt={title} className="w-full rounded-xl shadow-2xl border border-white/10" />
             ) : (
-              <div className="w-full aspect-[2/3] rounded-xl bg-bg-tertiary flex items-center justify-center text-text-tertiary">
+              <div className="w-full aspect-[2/3] rounded-xl bg-bg-tertiary flex items-center justify-center text-text-tertiary border border-white/10">
                 No Poster
               </div>
             )}
@@ -110,6 +132,16 @@ export function LibraryItemPage() {
                 <span className="text-sm text-text-secondary">{item.ProductionYear}</span>
               )}
               {resolution > 0 && <ResolutionBadge width={resolution} />}
+              {item.CommunityRating != null && (
+                <span className="text-sm text-text-secondary flex items-center gap-1">
+                  <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400" /> {item.CommunityRating.toFixed(1)}
+                </span>
+              )}
+              {runtimeMinutes != null && (
+                <span className="text-sm text-text-secondary flex items-center gap-1">
+                  <Clock className="h-3.5 w-3.5" /> {runtimeMinutes} min
+                </span>
+              )}
               {sizeGb && (
                 <span className="text-sm text-text-secondary flex items-center gap-1">
                   <HardDrive className="h-3.5 w-3.5" /> {sizeGb} GB
@@ -122,14 +154,32 @@ export function LibraryItemPage() {
               )}
             </div>
 
+            {/* Genres as pills */}
             {item.Genres?.length > 0 && (
-              <p className="text-xs text-text-tertiary mt-2">{item.Genres.join(' · ')}</p>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {item.Genres.map((genre: string) => (
+                  <GenrePill key={genre} genre={genre} />
+                ))}
+              </div>
             )}
 
+            {/* Overview with Read More */}
             {item.Overview && (
-              <p className="text-sm text-text-secondary mt-4 leading-relaxed line-clamp-4 md:line-clamp-none">
-                {item.Overview}
-              </p>
+              <div className="mt-4">
+                <p className={`text-sm text-text-secondary leading-relaxed ${
+                  !overviewExpanded && overviewIsLong ? 'line-clamp-4' : ''
+                }`}>
+                  {item.Overview}
+                </p>
+                {overviewIsLong && (
+                  <button
+                    onClick={() => setOverviewExpanded(!overviewExpanded)}
+                    className="text-xs text-accent mt-1 hover:underline"
+                  >
+                    {overviewExpanded ? 'Show less' : 'Read more'}
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Actions */}
@@ -147,17 +197,35 @@ export function LibraryItemPage() {
               </Button>
             </div>
 
-            {/* Media details */}
+            {/* File details — grid with labeled rows */}
             {mediaSource && (
               <div className="mt-6 p-4 rounded-xl bg-bg-secondary border border-white/5">
-                <h3 className="text-sm font-medium mb-2">File Details</h3>
-                <div className="grid grid-cols-2 gap-2 text-xs text-text-secondary">
-                  {videoStream?.DisplayTitle && <div>Video: {videoStream.DisplayTitle}</div>}
-                  {mediaSource.MediaStreams?.find((s: any) => s.Type === 'Audio')?.DisplayTitle && (
-                    <div>Audio: {mediaSource.MediaStreams.find((s: any) => s.Type === 'Audio').DisplayTitle}</div>
+                <h3 className="text-sm font-medium mb-3">File Details</h3>
+                <div className="space-y-0">
+                  {videoStream?.DisplayTitle && (
+                    <FileDetailRow label="Video" value={videoStream.DisplayTitle} />
                   )}
-                  {mediaSource.Container && <div>Container: {mediaSource.Container.toUpperCase()}</div>}
-                  {sizeGb && <div>Size: {sizeGb} GB</div>}
+                  {audioStream?.DisplayTitle && (
+                    <FileDetailRow label="Audio" value={audioStream.DisplayTitle} />
+                  )}
+                  {subtitleStream?.DisplayTitle && (
+                    <FileDetailRow label="Subtitles" value={subtitleStream.DisplayTitle} />
+                  )}
+                  {mediaSource.Container && (
+                    <FileDetailRow label="Container" value={mediaSource.Container.toUpperCase()} />
+                  )}
+                  {videoStream?.Width && videoStream?.Height && (
+                    <FileDetailRow label="Resolution" value={`${videoStream.Width} x ${videoStream.Height}`} />
+                  )}
+                  {mediaSource.Bitrate && (
+                    <FileDetailRow label="Bitrate" value={`${(mediaSource.Bitrate / 1_000_000).toFixed(1)} Mbps`} />
+                  )}
+                  {sizeGb && (
+                    <FileDetailRow label="Size" value={`${sizeGb} GB`} />
+                  )}
+                  {mediaSource.Path && (
+                    <FileDetailRow label="Path" value={mediaSource.Path.split('/').pop() ?? mediaSource.Path} />
+                  )}
                 </div>
               </div>
             )}

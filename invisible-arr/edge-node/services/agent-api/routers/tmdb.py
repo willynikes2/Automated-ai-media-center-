@@ -48,7 +48,7 @@ async def detail(media_type: str, tmdb_id: int):
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
             f"{_BASE}/{media_type}/{tmdb_id}",
-            params={**_params(), "append_to_response": "credits"},
+            params={**_params(), "append_to_response": "credits,videos"},
         )
         r.raise_for_status()
         return r.json()

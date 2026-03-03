@@ -1,23 +1,20 @@
 import { useState } from 'react';
 import { AdminDashboard } from '@/components/admin/AdminDashboard';
 import { UserManager } from '@/components/admin/UserManager';
+import { InviteManager } from '@/components/admin/InviteManager';
 import { AllJobs } from '@/components/admin/AllJobs';
-import { RDStatus } from '@/components/admin/RDStatus';
-import { VPNStatus } from '@/components/admin/VPNStatus';
-import { ServerInfo } from '@/components/jellyfin/ServerInfo';
-import { LibraryStats } from '@/components/jellyfin/LibraryStats';
-import { QuickConnect } from '@/components/jellyfin/QuickConnect';
+import { SystemHealth } from '@/components/admin/SystemHealth';
 
 const tabs = [
-  { key: 'overview', label: 'Overview' },
+  { key: 'dashboard', label: 'Dashboard' },
   { key: 'users', label: 'Users' },
-  { key: 'jobs', label: 'Jobs' },
+  { key: 'invites', label: 'Invites' },
+  { key: 'jobs', label: 'All Jobs' },
   { key: 'system', label: 'System' },
-  { key: 'connect', label: 'Quick Connect' },
 ] as const;
 
 export function AdminPage() {
-  const [tab, setTab] = useState<string>('overview');
+  const [tab, setTab] = useState<string>('dashboard');
 
   return (
     <div className="px-4 md:px-8 py-6">
@@ -38,22 +35,11 @@ export function AdminPage() {
         ))}
       </div>
 
-      {tab === 'overview' && <AdminDashboard />}
+      {tab === 'dashboard' && <AdminDashboard />}
       {tab === 'users' && <UserManager />}
+      {tab === 'invites' && <InviteManager />}
       {tab === 'jobs' && <AllJobs />}
-      {tab === 'system' && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <ServerInfo />
-          <LibraryStats />
-          <RDStatus />
-          <VPNStatus />
-        </div>
-      )}
-      {tab === 'connect' && (
-        <div className="max-w-md mx-auto">
-          <QuickConnect />
-        </div>
-      )}
+      {tab === 'system' && <SystemHealth />}
     </div>
   );
 }

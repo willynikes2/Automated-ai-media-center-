@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom';
-import { Compass, Search, Library, Activity, Settings } from 'lucide-react';
+import { Compass, Search, Library, Activity, Settings, Shield } from 'lucide-react';
+import { useAuthStore } from '@/stores/authStore';
+import { useMemo } from 'react';
 
-const tabs = [
+const baseTabs = [
   { to: '/', icon: Compass, label: 'Discover' },
   { to: '/search', icon: Search, label: 'Search' },
   { to: '/library', icon: Library, label: 'Library' },
@@ -10,6 +12,16 @@ const tabs = [
 ];
 
 export function MobileNav() {
+  const role = useAuthStore((s) => s.user?.role);
+
+  const tabs = useMemo(() => {
+    const list = [...baseTabs];
+    if (role === 'admin') {
+      list.push({ to: '/admin', icon: Shield, label: 'Admin' });
+    }
+    return list;
+  }, [role]);
+
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-bg-secondary/95 backdrop-blur-md border-t border-white/5 pb-[var(--sab)]">
       <div className="flex items-center justify-around h-16">

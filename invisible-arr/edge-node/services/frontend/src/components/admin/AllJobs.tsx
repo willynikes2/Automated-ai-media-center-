@@ -1,11 +1,11 @@
 import { JobList } from '@/components/jobs/JobList';
-import { useJobs } from '@/hooks/useJobs';
+import { useAllJobs } from '@/hooks/useAdmin';
 import { useState } from 'react';
 import { Select } from '@/components/ui/Select';
 
 export function AllJobs() {
   const [stateFilter, setStateFilter] = useState('');
-  const { data: jobs, isLoading } = useJobs({ state: stateFilter || undefined, limit: 100 });
+  const { data: jobs, isLoading } = useAllJobs({ state: stateFilter || undefined, limit: 100 });
 
   return (
     <div>
@@ -18,7 +18,10 @@ export function AllJobs() {
             { value: 'CREATED', label: 'Created' },
             { value: 'RESOLVING', label: 'Resolving' },
             { value: 'SEARCHING', label: 'Searching' },
+            { value: 'SELECTED', label: 'Selected' },
             { value: 'ACQUIRING', label: 'Acquiring' },
+            { value: 'IMPORTING', label: 'Importing' },
+            { value: 'VERIFYING', label: 'Verifying' },
             { value: 'DONE', label: 'Done' },
             { value: 'FAILED', label: 'Failed' },
           ]}
