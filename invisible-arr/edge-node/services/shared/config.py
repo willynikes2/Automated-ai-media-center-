@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     vpn_enabled: bool = False
     vpn_provider: str = ""
 
+    # qBittorrent (VPN torrent fallback)
+    qbt_url: str = "http://gluetun:8080"
+    qbt_username: str = "admin"
+    qbt_password: str = ""
+
+    # Usenet
+    usenet_enabled: bool = False
+    sabnzbd_url: str = "http://sabnzbd:8080"
+    sabnzbd_api_key: str = ""
+
     # LLM (optional)
     llm_provider: str = "none"
     llm_api_key: str = ""

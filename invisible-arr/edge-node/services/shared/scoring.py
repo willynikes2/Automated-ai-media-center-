@@ -25,6 +25,7 @@ class ParsedRelease:
     info_hash: str = ""
     magnet_link: str = ""
     indexer: str = ""
+    protocol: str = "torrent"  # torrent | usenet
     banned: bool = False
     ban_reason: str = ""
 

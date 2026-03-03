@@ -23,6 +23,7 @@ class RequestCreate(BaseModel):
     episode: int | None = None
     preferred_resolution: int | None = Field(None, ge=240, le=8640)
     preferred_downloader: Literal["rd", "torrent"] | None = None
+    acquisition_mode: Literal["download", "stream"] = "download"
 
 
 class PrefsUpdate(BaseModel):
@@ -69,6 +70,9 @@ class JobResponse(BaseModel):
     selected_candidate: dict | None = None
     rd_torrent_id: str | None = None
     imported_path: str | None = None
+    acquisition_mode: str = "download"
+    acquisition_method: str | None = None
+    streaming_urls: dict | None = None
     retry_count: int
     created_at: datetime
     updated_at: datetime
@@ -90,6 +94,9 @@ class JobListResponse(BaseModel):
     selected_candidate: dict | None = None
     rd_torrent_id: str | None = None
     imported_path: str | None = None
+    acquisition_mode: str = "download"
+    acquisition_method: str | None = None
+    streaming_urls: dict | None = None
     retry_count: int
     created_at: datetime
     updated_at: datetime

@@ -215,6 +215,22 @@ services:
     profiles:
       - vpn
 
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: automedia-sabnzbd
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/sabnzbd:/config
+      - ${DOWNLOADS_PATH:-./data/downloads}:/data/downloads
+    profiles:
+      - usenet
+    networks:
+      - internal
+
   # ═══════════════════════════════════════
   # INFRASTRUCTURE
   # ═══════════════════════════════════════
@@ -337,6 +353,12 @@ services:
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
       - VPN_ENABLED=${VPN_ENABLED:-false}
+      - USENET_ENABLED=${USENET_ENABLED:-false}
+      - SABNZBD_URL=http://sabnzbd:8080
+      - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
+      - QBT_URL=http://gluetun:8080
+      - QBT_USERNAME=admin
+      - QBT_PASSWORD=${QBT_PASSWORD:-}
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
       - SONARR_URL=http://sonarr:8989

@@ -97,6 +97,9 @@ class Job(Base):
     selected_candidate: Mapped[dict | None] = mapped_column(type_=JSON, default=None)
     rd_torrent_id: Mapped[str | None] = mapped_column(String(255), default=None)
     imported_path: Mapped[str | None] = mapped_column(String(1000), default=None)
+    acquisition_mode: Mapped[str] = mapped_column(String(20), default="download")  # download | stream
+    acquisition_method: Mapped[str | None] = mapped_column(String(20), default=None)  # rd, usenet, torrent
+    streaming_urls: Mapped[dict | None] = mapped_column(type_=JSON, nullable=True, default=None)
     retry_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

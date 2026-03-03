@@ -70,6 +70,7 @@ async def create_request(
             season=body.season,
             episode=body.episode,
             state=JobState.CREATED,
+            acquisition_mode=body.acquisition_mode,
         )
         session.add(job)
         await session.commit()
@@ -101,6 +102,9 @@ async def create_request(
         selected_candidate=job.selected_candidate,
         rd_torrent_id=job.rd_torrent_id,
         imported_path=job.imported_path,
+        acquisition_mode=job.acquisition_mode,
+        acquisition_method=job.acquisition_method,
+        streaming_urls=job.streaming_urls,
         retry_count=job.retry_count,
         created_at=job.created_at,
         updated_at=job.updated_at,
