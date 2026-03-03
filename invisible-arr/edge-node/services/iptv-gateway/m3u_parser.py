@@ -63,6 +63,10 @@ def parse_extinf(line: str) -> dict:
     # Prefer tvg-name, fall back to display name
     name = tvg_name or display_name or "Unknown"
 
+    # Discard logos that exceed DB column limit (data URIs, excessively long URLs)
+    if logo and len(logo) > 2000:
+        logo = None
+
     return {
         "tvg_id": tvg_id,
         "name": name,

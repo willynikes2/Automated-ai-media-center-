@@ -96,17 +96,35 @@ async def add_source(
 
     # Fetch M3U content
     headers = body.headers_json or {}
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(body.m3u_url, headers=headers)
-            resp.raise_for_status()
-            m3u_content = resp.text
-    except httpx.HTTPError as exc:
-        logger.error("Failed to fetch M3U from %s: %s", body.m3u_url, exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch M3U: {exc}",
-        ) from exc
+    if body.m3u_url.startswith("file://"):
+        # Local file path (e.g. file:///data/iptv/filtered.m3u)
+        import pathlib
+        local_path = pathlib.Path(body.m3u_url.removeprefix("file://"))
+        allowed_dir = pathlib.Path("/data/iptv")
+        if not local_path.resolve().is_relative_to(allowed_dir.resolve()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Local files must be under /data/iptv/",
+            )
+        try:
+            m3u_content = local_path.read_text(errors="replace")
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Local M3U file not found: {local_path}",
+            ) from exc
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                resp = await client.get(body.m3u_url, headers=headers)
+                resp.raise_for_status()
+                m3u_content = resp.text
+        except httpx.HTTPError as exc:
+            logger.error("Failed to fetch M3U from %s: %s", body.m3u_url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch M3U: {exc}",
+            ) from exc
 
     # Parse M3U
     parsed_channels = parse_m3u(m3u_content)

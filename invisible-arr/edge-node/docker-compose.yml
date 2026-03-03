@@ -53,6 +53,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
       - ${MEDIA_PATH:-./data/media}:/data/media:ro
+      - ${RECORDINGS_PATH:-./data/recordings}:/data/recordings
     ports:
       - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
     labels:
@@ -404,6 +405,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
+      - ${CONFIG_PATH:-./config}/iptv:/data/iptv:ro
     depends_on:
       postgres:
         condition: service_healthy
