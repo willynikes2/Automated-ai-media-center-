@@ -16,7 +16,7 @@ from shared.database import Base
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.utcnow()
 
 
 def _new_uuid() -> uuid.UUID:

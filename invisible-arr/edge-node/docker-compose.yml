@@ -278,10 +278,11 @@ services:
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8880/health')"]
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
     labels:
       - "traefik.enable=${DOMAIN:+true}"
       - "traefik.http.routers.agent-api.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`)"
