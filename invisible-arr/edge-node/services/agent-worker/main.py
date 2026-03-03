@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
+
+import sentry_sdk
 
 # ---------------------------------------------------------------------------
 # Ensure the shared package is importable when running inside the container
@@ -25,11 +28,21 @@ from worker import process_job  # noqa: E402
 MAX_RETRIES = 5
 RETRY_DELAYS = [30, 60, 120, 300, 600]  # seconds between retries
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("agent-worker")
+from shared.logging import setup_logging  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Sentry
+# ---------------------------------------------------------------------------
+_sentry_dsn = os.environ.get("SENTRY_DSN_BACKEND", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("ENV", "dev"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
+
+logger = setup_logging("agent-worker")
 
 # ---------------------------------------------------------------------------
 # Graceful shutdown

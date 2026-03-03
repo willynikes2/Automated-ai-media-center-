@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+import sentry_sdk
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from starlette.responses import Response as StarletteResponse
 
 # ---------------------------------------------------------------------------
 # Ensure the shared package is importable when running inside the container
@@ -23,13 +27,36 @@ if str(_app_root) not in sys.path:
 from shared.database import init_db, get_engine  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 
-from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search, storage, admin, reseller  # noqa: E402
+from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search, storage, admin, reseller, bugs  # noqa: E402
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("agent-api")
+from shared.logging import setup_logging  # noqa: E402
+from shared.middleware import CorrelationMiddleware  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Sentry
+# ---------------------------------------------------------------------------
+_sentry_dsn = os.environ.get("SENTRY_DSN_BACKEND", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("ENV", "dev"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+        before_send=lambda event, hint: _sentry_before_send(event, hint),
+    )
+
+
+def _sentry_before_send(event: dict, hint: dict) -> dict | None:
+    """Strip sensitive headers / data before sending to Sentry."""
+    if request := event.get("request"):
+        headers = request.get("headers", {})
+        for key in list(headers):
+            if any(s in key.lower() for s in ("api-key", "token", "secret", "authorization")):
+                headers[key] = "[REDACTED]"
+    return event
+
+
+logger = setup_logging("agent-api")
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +113,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(CorrelationMiddleware)
 
 # Routers ---------------------------------------------------------------
 app.include_router(health.router, tags=["health"])
@@ -99,6 +127,15 @@ app.include_router(search.router, prefix="/v1", tags=["search"])
 app.include_router(storage.router, prefix="/v1", tags=["storage"])
 app.include_router(admin.router, prefix="/v1", tags=["admin"])
 app.include_router(reseller.router, prefix="/v1", tags=["reseller"])
+app.include_router(bugs.router, prefix="/v1", tags=["bugs"])
+
+
+# ---------------------------------------------------------------------------
+# Metrics endpoint
+# ---------------------------------------------------------------------------
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    return StarletteResponse(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------

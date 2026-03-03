@@ -72,6 +72,8 @@ services:
   frontend:
     build:
       context: ./services/frontend
+      args:
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     container_name: automedia-frontend
     restart: unless-stopped
     depends_on:
@@ -260,6 +262,77 @@ services:
       - internal
 
   # ═══════════════════════════════════════
+  # OBSERVABILITY
+  # ═══════════════════════════════════════
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=2GB"
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    mem_limit: 128m
+    networks:
+      - internal
+
+  loki:
+    image: grafana/loki:3.3.0
+    container_name: loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./config/loki:/etc/loki:ro
+      - loki_data:/loki
+    mem_limit: 192m
+    networks:
+      - internal
+
+  promtail:
+    image: grafana/promtail:3.3.0
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./config/promtail:/etc/promtail:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+    depends_on:
+      - loki
+    networks:
+      - internal
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+      - GF_SERVER_ROOT_URL=https://status.${DOMAIN:-localhost}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    mem_limit: 128m
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.grafana.rule=Host(`status.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - internal
+
+  # ═══════════════════════════════════════
   # AGENT LAYER
   # ═══════════════════════════════════════
 
@@ -299,6 +372,8 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
       - JELLYFIN_URL=http://jellyfin:8096
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - ENV=${ENV:-dev}
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
     healthcheck:
@@ -367,6 +442,8 @@ services:
       - DOWNLOADS_PATH=/data/downloads
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - JELLYFIN_URL=http://jellyfin:8096
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - ENV=${ENV:-dev}
     networks:
       - internal
 
@@ -448,3 +525,6 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:

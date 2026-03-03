@@ -53,6 +53,13 @@ class UserTier(str, enum.Enum):
     POWER = "power"
 
 
+class BugReportStatus(str, enum.Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -220,3 +227,21 @@ class IptvChannel(Base):
     preferred_group: Mapped[str | None] = mapped_column(String(500), default=None)
 
     source: Mapped["IptvSource"] = relationship(back_populates="channels")
+
+
+class BugReport(Base):
+    __tablename__ = "bug_reports"
+    __table_args__ = (
+        Index("ix_bug_reports_user_id", "user_id"),
+        Index("ix_bug_reports_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    route: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(String(5000))
+    correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    browser_info: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default=BugReportStatus.OPEN)
+    admin_notes: Mapped[str | None] = mapped_column(String(5000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())

@@ -239,3 +239,38 @@ class AdminUserUpdate(BaseModel):
     storage_quota_gb: float | None = None
     max_concurrent_jobs: int | None = None
     max_requests_per_day: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Bug report schemas
+# ---------------------------------------------------------------------------
+
+
+class BugReportCreate(BaseModel):
+    """Body for POST /v1/bugs."""
+
+    route: str = Field(max_length=500)
+    description: str = Field(min_length=1, max_length=5000)
+    correlation_id: str | None = Field(None, max_length=255)
+    browser_info: str | None = Field(None, max_length=1000)
+
+
+class BugReportResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    route: str
+    description: str
+    correlation_id: str | None = None
+    browser_info: str | None = None
+    status: str
+    admin_notes: str | None = None
+    created_at: datetime
+
+
+class BugReportUpdate(BaseModel):
+    """Body for PUT /v1/admin/bugs/{id}."""
+
+    status: str | None = None
+    admin_notes: str | None = Field(None, max_length=5000)

@@ -1,5 +1,9 @@
 import axios from 'axios';
 import { useAuthStore } from '@/stores/authStore';
+import { Sentry } from '@/lib/sentry';
+
+/** Last correlation ID received from the API — used by bug report. */
+export let lastCorrelationId = '';
 
 export const agentApi = axios.create({
   baseURL: '/api',
@@ -13,8 +17,31 @@ agentApi.interceptors.request.use((config) => {
 });
 
 agentApi.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const cid = response.headers['x-correlation-id'];
+    if (cid) {
+      lastCorrelationId = cid;
+      Sentry.setTag('correlation_id', cid);
+    }
+    return response;
+  },
   (error) => {
+    if (error.response) {
+      const cid = error.response.headers?.['x-correlation-id'];
+      if (cid) {
+        lastCorrelationId = cid;
+        Sentry.setTag('correlation_id', cid);
+      }
+      Sentry.addBreadcrumb({
+        category: 'http',
+        message: `${error.config?.method?.toUpperCase()} ${error.config?.url} → ${error.response.status}`,
+        level: 'error',
+        data: {
+          status: error.response.status,
+          correlation_id: cid || undefined,
+        },
+      });
+    }
     if (error.response?.status === 401) {
       useAuthStore.getState().logout();
       window.location.href = '/login';
