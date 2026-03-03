@@ -146,3 +146,35 @@ async def clear_download_progress(job_id: str) -> None:
     """Remove progress tracking for a completed job."""
     r = await get_redis()
     await _safe_redis_op(r.delete(f"{_PROGRESS_PREFIX}{job_id}"))
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_PREFIX = "invisiblearr:ratelimit:"
+
+
+async def check_and_increment_rate(user_id: str, daily_limit: int) -> bool:
+    """Return True if the request is allowed. Increments the daily counter.
+
+    Uses Redis INCR with a TTL that expires at midnight UTC.
+    A daily_limit of -1 means unlimited.
+    """
+    if daily_limit == -1:
+        return True
+    r = await get_redis()
+    key = f"{_RATE_LIMIT_PREFIX}{user_id}"
+    count = await _safe_redis_op(r.incr(key))
+    if count == 1:
+        # First request today — set TTL to 24 hours
+        await _safe_redis_op(r.expire(key, 86400))
+    return count <= daily_limit
+
+
+async def get_rate_count(user_id: str) -> int:
+    """Return the current daily request count for a user."""
+    r = await get_redis()
+    key = f"{_RATE_LIMIT_PREFIX}{user_id}"
+    val = await _safe_redis_op(r.get(key))
+    return int(val) if val else 0

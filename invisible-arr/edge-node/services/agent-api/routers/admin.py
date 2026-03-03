@@ -1,17 +1,36 @@
-"""Admin endpoints -- RD status, VPN status."""
+"""Admin endpoints -- RD status, VPN status, user/invite management, stats."""
 
 from __future__ import annotations
 
 import logging
+import secrets
+import uuid
+from datetime import datetime, timedelta
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func, select
 
+from dependencies import require_admin
 from shared.config import get_config
+from shared.database import get_session_factory
+from shared.models import Invite, Job, User
+from shared.schemas import (
+    AdminStatsResponse,
+    AdminUserUpdate,
+    InviteCreate,
+    InviteResponse,
+    UserResponse,
+)
 
 logger = logging.getLogger("agent-api.admin")
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Local response models (RD / VPN status)
+# ---------------------------------------------------------------------------
 
 
 class RDStatusResponse(BaseModel):
@@ -29,8 +48,13 @@ class VPNStatusResponse(BaseModel):
     provider: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# RD / VPN status (now secured)
+# ---------------------------------------------------------------------------
+
+
 @router.get("/admin/rd-status", response_model=RDStatusResponse)
-async def get_rd_status() -> RDStatusResponse:
+async def get_rd_status(user: User = Depends(require_admin)) -> RDStatusResponse:
     """Return Real-Debrid account status."""
     config = get_config()
 
@@ -56,7 +80,7 @@ async def get_rd_status() -> RDStatusResponse:
 
 
 @router.get("/admin/vpn-status", response_model=VPNStatusResponse)
-async def get_vpn_status() -> VPNStatusResponse:
+async def get_vpn_status(user: User = Depends(require_admin)) -> VPNStatusResponse:
     """Return VPN/Gluetun connection status."""
     config = get_config()
 
@@ -81,4 +105,143 @@ async def get_vpn_status() -> VPNStatusResponse:
         enabled=True,
         connected=False,
         provider=config.vpn_provider or None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# User management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/users", response_model=list[UserResponse])
+async def list_users(user: User = Depends(require_admin)) -> list[UserResponse]:
+    """List all users ordered by created_at descending."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(User).order_by(User.created_at.desc())
+        )
+        users = result.scalars().all()
+    return [UserResponse.model_validate(u) for u in users]
+
+
+@router.put("/admin/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: uuid.UUID,
+    body: AdminUserUpdate,
+    user: User = Depends(require_admin),
+) -> UserResponse:
+    """Update a user's role, tier, or limits."""
+    factory = get_session_factory()
+    async with factory() as session:
+        target = await session.get(User, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        update_data = body.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(target, field, value)
+
+        await session.commit()
+        await session.refresh(target)
+        return UserResponse.model_validate(target)
+
+
+@router.delete("/admin/users/{user_id}")
+async def deactivate_user(
+    user_id: uuid.UUID,
+    user: User = Depends(require_admin),
+) -> dict[str, str]:
+    """Soft-deactivate a user (set is_active = False)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        target = await session.get(User, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        target.is_active = False
+        await session.commit()
+    return {"status": "deactivated"}
+
+
+# ---------------------------------------------------------------------------
+# Invite management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/invites", response_model=list[InviteResponse])
+async def list_invites(user: User = Depends(require_admin)) -> list[InviteResponse]:
+    """List all invites."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(Invite).order_by(Invite.created_at.desc())
+        )
+        invites = result.scalars().all()
+    return [InviteResponse.model_validate(inv) for inv in invites]
+
+
+@router.post("/admin/invites", response_model=InviteResponse, status_code=201)
+async def create_invite(
+    body: InviteCreate,
+    user: User = Depends(require_admin),
+) -> InviteResponse:
+    """Create a new invite code."""
+    code = f"AUTOMEDIA-{secrets.token_hex(4).upper()}"
+
+    expires_at = None
+    if body.expires_in_days is not None:
+        expires_at = datetime.utcnow() + timedelta(days=body.expires_in_days)
+
+    invite = Invite(
+        code=code,
+        created_by=user.id,
+        tier=body.tier,
+        max_uses=body.max_uses,
+        expires_at=expires_at,
+    )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(invite)
+        await session.commit()
+        await session.refresh(invite)
+        return InviteResponse.model_validate(invite)
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/stats", response_model=AdminStatsResponse)
+async def get_stats(user: User = Depends(require_admin)) -> AdminStatsResponse:
+    """Return system-wide statistics."""
+    factory = get_session_factory()
+    async with factory() as session:
+        total_users = await session.scalar(select(func.count(User.id))) or 0
+        active_users = await session.scalar(
+            select(func.count(User.id)).where(User.is_active.is_(True))
+        ) or 0
+        total_jobs = await session.scalar(select(func.count(Job.id))) or 0
+
+        # Jobs grouped by state
+        state_rows = await session.execute(
+            select(Job.state, func.count(Job.id)).group_by(Job.state)
+        )
+        jobs_by_state: dict[str, int] = {
+            row[0]: row[1] for row in state_rows.all()
+        }
+
+        # Total storage used across all users
+        storage_used_gb = await session.scalar(
+            select(func.coalesce(func.sum(User.storage_used_gb), 0.0))
+        ) or 0.0
+
+    return AdminStatsResponse(
+        total_users=total_users,
+        active_users=active_users,
+        total_jobs=total_jobs,
+        jobs_by_state=jobs_by_state,
+        storage_used_gb=round(float(storage_used_gb), 2),
     )

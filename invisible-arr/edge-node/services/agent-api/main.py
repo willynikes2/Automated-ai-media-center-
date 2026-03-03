@@ -8,10 +8,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
 # Ensure the shared package is importable when running inside the container
@@ -21,8 +20,7 @@ _app_root = Path("/app")
 if str(_app_root) not in sys.path:
     sys.path.insert(0, str(_app_root))
 
-from shared.database import init_db, get_engine, get_session_factory  # noqa: E402
-from shared.models import User  # noqa: E402
+from shared.database import init_db, get_engine  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 
 from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search, storage, admin  # noqa: E402
@@ -32,22 +30,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("agent-api")
-
-
-# ---------------------------------------------------------------------------
-# Auth dependency
-# ---------------------------------------------------------------------------
-async def get_current_user(x_api_key: str = Header(..., alias="X-Api-Key")) -> User:
-    """Validate the X-Api-Key header and return the corresponding User."""
-    factory = get_session_factory()
-    async with factory() as session:
-        result = await session.execute(
-            select(User).where(User.api_key == x_api_key)
-        )
-        user: User | None = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return user
 
 
 # ---------------------------------------------------------------------------

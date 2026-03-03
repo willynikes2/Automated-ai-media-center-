@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from shared.database import Base
 from shared.models import (  # noqa: F401
     Blacklist,
+    Invite,
     IptvChannel,
     IptvSource,
     Job,

@@ -21,7 +21,8 @@ from sqlalchemy import select, update as sa_update
 
 from shared.config import get_config
 from shared.database import get_session_factory
-from shared.models import Blacklist, Job, JobEvent, JobState, Prefs
+from shared.encryption import decrypt
+from shared.models import Blacklist, Job, JobEvent, JobState, Prefs, User
 from shared.naming import movie_path, tv_path
 from shared.prowlarr_client import ProwlarrClient
 from shared.qbt_client import QBittorrentClient
@@ -140,6 +141,38 @@ async def is_blacklisted(user_id: uuid.UUID, info_hash: str) -> bool:
             )
         )
         return result.scalar_one_or_none() is not None
+
+
+async def get_user_rd_token(user_id: uuid.UUID) -> str | None:
+    """Return the user's decrypted RD API token, falling back to global config."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(User.rd_api_token_enc).where(User.id == user_id)
+        )
+        enc_token = result.scalar_one_or_none()
+
+    if enc_token:
+        try:
+            return decrypt(enc_token)
+        except Exception:
+            logger.warning("Failed to decrypt RD token for user %s, falling back to global", user_id)
+
+    config = get_config()
+    return config.rd_api_token if config.rd_enabled else None
+
+
+async def update_storage_used(user_id: uuid.UUID, added_gb: float) -> None:
+    """Increment the user's storage_used_gb after a successful import."""
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            sa_update(User)
+            .where(User.id == user_id)
+            .values(storage_used_gb=User.storage_used_gb + added_gb)
+        )
+        await session.commit()
+    logger.info("Updated storage for user %s: +%.2f GB", user_id, added_gb)
 
 
 def get_year(job: Job) -> int:
@@ -348,13 +381,14 @@ async def acquire(
     config = get_config()
     errors: list[str] = []
 
-    # 1. Real-Debrid
-    if config.rd_enabled and config.rd_api_token:
+    # 1. Real-Debrid (per-user token with global fallback)
+    rd_token = await get_user_rd_token(job.user_id)
+    if config.rd_enabled and rd_token:
         try:
             if job.acquisition_mode == "stream":
-                await acquire_via_rd_stream(job, candidate)
+                await acquire_via_rd_stream(job, candidate, rd_token=rd_token)
             else:
-                await acquire_via_rd(job, candidate)
+                await acquire_via_rd(job, candidate, rd_token=rd_token)
             await _set_acquisition_method(job, "rd")
             return
         except Exception as exc:
@@ -439,11 +473,12 @@ async def _resolve_download_url(url: str) -> str:
     raise ValueError(f"Could not extract magnet from download URL (status={resp.status_code})")
 
 
-async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
+async def acquire_via_rd(job: Job, candidate: ParsedRelease, *, rd_token: str | None = None) -> None:
     """Acquire a release through Real-Debrid, download files, then import."""
     config = get_config()
+    token = rd_token or config.rd_api_token
 
-    async with RealDebridClient(config.rd_api_token) as rd:
+    async with RealDebridClient(token) as rd:
         magnet = _resolve_magnet(candidate)
 
         if not magnet.startswith("magnet:"):
@@ -533,11 +568,12 @@ async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
     await import_files(job, staging_dir)
 
 
-async def acquire_via_rd_stream(job: Job, candidate: ParsedRelease) -> None:
+async def acquire_via_rd_stream(job: Job, candidate: ParsedRelease, *, rd_token: str | None = None) -> None:
     """RD streaming mode -- unrestrict links and create .strm files in Jellyfin library."""
     config = get_config()
+    token = rd_token or config.rd_api_token
 
-    async with RealDebridClient(config.rd_api_token) as rd:
+    async with RealDebridClient(token) as rd:
         magnet = _resolve_magnet(candidate)
 
         if not magnet.startswith("magnet:"):
@@ -716,6 +752,7 @@ async def import_files(job: Job, staging_dir: Path) -> None:
 
     year = get_year(job)
     imported_path: str | None = None
+    total_imported_bytes: int = 0
 
     for vf in video_files:
         if job.media_type == "movie":
@@ -731,10 +768,20 @@ async def import_files(job: Job, staging_dir: Path) -> None:
             logger.warning("Path traversal detected for %s, skipping", dest)
             continue
 
+        file_size = vf.stat().st_size
         dest.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.move, str(vf), str(dest))
         imported_path = str(dest)
+        total_imported_bytes += file_size
         logger.info("Imported %s -> %s", vf.name, dest)
+
+    # Track storage usage
+    if total_imported_bytes > 0:
+        added_gb = total_imported_bytes / (1024 ** 3)
+        try:
+            await update_storage_used(job.user_id, added_gb)
+        except Exception:
+            logger.exception("Failed to update storage tracking for user %s", job.user_id)
 
     # Persist the imported path on the job
     if imported_path is not None:

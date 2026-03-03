@@ -282,6 +282,9 @@ services:
       - DEFAULT_MAX_EPISODE_SIZE_GB=${DEFAULT_MAX_EPISODE_SIZE_GB:-4}
       - MEDIA_PATH=/data/media
       - DOWNLOADS_PATH=/data/downloads
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
+      - JELLYFIN_URL=http://jellyfin:8096
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
     healthcheck:
@@ -348,6 +351,8 @@ services:
       - DEFAULT_MAX_EPISODE_SIZE_GB=${DEFAULT_MAX_EPISODE_SIZE_GB:-4}
       - MEDIA_PATH=/data/media
       - DOWNLOADS_PATH=/data/downloads
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - JELLYFIN_URL=http://jellyfin:8096
     networks:
       - internal
 

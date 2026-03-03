@@ -6,12 +6,13 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from dependencies import get_current_user
 from shared.database import get_session_factory
-from shared.models import Job, JobEvent, JobState
+from shared.models import Job, JobEvent, JobState, User
 from shared.redis_client import enqueue_job, get_download_progress
 from shared.schemas import JobEventResponse, JobListResponse, JobResponse
 
@@ -20,15 +21,22 @@ router = APIRouter()
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: uuid.UUID) -> JobResponse:
+async def get_job(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> JobResponse:
     """Return a single job with its events."""
 
     async with get_session_factory()() as session:
-        result = await session.execute(
+        stmt = (
             select(Job)
             .where(Job.id == job_id)
             .options(selectinload(Job.events))
         )
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+
+        result = await session.execute(stmt)
         job: Job | None = result.scalar_one_or_none()
 
     if job is None:
@@ -71,6 +79,8 @@ async def get_job(job_id: uuid.UUID) -> JobResponse:
 async def list_jobs(
     status: JobState | None = Query(default=None, description="Filter by job state"),
     limit: int = Query(default=20, ge=1, le=100, description="Max results"),
+    all_users: bool = Query(default=False, description="Admins: show jobs from all users"),
+    user: User = Depends(get_current_user),
 ) -> list[JobListResponse]:
     """Return a paginated list of jobs, optionally filtered by status."""
 
@@ -79,6 +89,11 @@ async def list_jobs(
 
         if status is not None:
             stmt = stmt.where(Job.state == status)
+
+        # Non-admins always see only their own jobs.
+        # Admins see only their own unless all_users=True.
+        if not (user.role == "admin" and all_users):
+            stmt = stmt.where(Job.user_id == user.id)
 
         result = await session.execute(stmt)
         jobs: list[Job] = list(result.scalars().all())
@@ -109,13 +124,18 @@ async def list_jobs(
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobListResponse)
-async def retry_job(job_id: uuid.UUID) -> JobListResponse:
+async def retry_job(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> JobListResponse:
     """Reset a FAILED job to CREATED and re-enqueue it for processing."""
 
     async with get_session_factory()() as session:
-        result = await session.execute(
-            select(Job).where(Job.id == job_id)
-        )
+        stmt = select(Job).where(Job.id == job_id)
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+
+        result = await session.execute(stmt)
         job: Job | None = result.scalar_one_or_none()
 
         if job is None:
@@ -165,8 +185,21 @@ async def retry_job(job_id: uuid.UUID) -> JobListResponse:
 
 
 @router.get("/jobs/{job_id}/progress")
-async def job_progress(job_id: uuid.UUID) -> dict:
+async def job_progress(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> dict:
     """Return download progress for an active job."""
+
+    # Verify the job belongs to the requesting user (admins can see all).
+    async with get_session_factory()() as session:
+        stmt = select(Job.id).where(Job.id == job_id)
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+        result = await session.execute(stmt)
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
     progress = await get_download_progress(str(job_id))
     if progress is None:
         return {"percent": -1, "detail": "No active download"}

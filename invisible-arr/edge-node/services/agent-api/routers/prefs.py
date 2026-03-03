@@ -1,12 +1,13 @@
-"""User preferences endpoints -- get and upsert prefs for the default user."""
+"""User preferences endpoints -- get and upsert prefs for the authenticated user."""
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
+from dependencies import get_current_user
 from shared.database import get_session_factory
 from shared.models import Prefs, User
 from shared.schemas import PrefsResponse, PrefsUpdate
@@ -14,30 +15,14 @@ from shared.schemas import PrefsResponse, PrefsUpdate
 logger = logging.getLogger("agent-api.prefs")
 router = APIRouter()
 
-_DEFAULT_USER_NAME = "default"
-
-
-async def _get_default_user_id() -> str | None:
-    """Look up the default user's id. Returns None if no default user exists."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(User.id).where(User.name == _DEFAULT_USER_NAME)
-        )
-        row = result.scalar_one_or_none()
-        return row
-
 
 @router.get("/prefs", response_model=PrefsResponse)
-async def get_prefs() -> PrefsResponse:
-    """Return the current preferences for the default user."""
-
-    user_id = await _get_default_user_id()
-    if user_id is None:
-        raise HTTPException(status_code=404, detail="Default user not found. Submit a request first.")
+async def get_prefs(user: User = Depends(get_current_user)) -> PrefsResponse:
+    """Return the current preferences for the authenticated user."""
 
     async with get_session_factory()() as session:
         result = await session.execute(
-            select(Prefs).where(Prefs.user_id == user_id)
+            select(Prefs).where(Prefs.user_id == user.id)
         )
         prefs: Prefs | None = result.scalar_one_or_none()
 
@@ -59,21 +44,20 @@ async def get_prefs() -> PrefsResponse:
 
 
 @router.post("/prefs", response_model=PrefsResponse, status_code=200)
-async def upsert_prefs(body: PrefsUpdate) -> PrefsResponse:
-    """Create or update preferences for the default user (upsert)."""
-
-    user_id = await _get_default_user_id()
-    if user_id is None:
-        raise HTTPException(status_code=404, detail="Default user not found. Submit a request first.")
+async def upsert_prefs(
+    body: PrefsUpdate,
+    user: User = Depends(get_current_user),
+) -> PrefsResponse:
+    """Create or update preferences for the authenticated user (upsert)."""
 
     async with get_session_factory()() as session:
         result = await session.execute(
-            select(Prefs).where(Prefs.user_id == user_id)
+            select(Prefs).where(Prefs.user_id == user.id)
         )
         prefs: Prefs | None = result.scalar_one_or_none()
 
         if prefs is None:
-            prefs = Prefs(user_id=user_id)
+            prefs = Prefs(user_id=user.id)
             session.add(prefs)
 
         # Apply only the fields that were explicitly provided.
@@ -84,7 +68,7 @@ async def upsert_prefs(body: PrefsUpdate) -> PrefsResponse:
         await session.commit()
         await session.refresh(prefs)
 
-        logger.info("Upserted preferences for user_id=%s", user_id)
+        logger.info("Upserted preferences for user_id=%s", user.id)
 
         return PrefsResponse(
             id=prefs.id,

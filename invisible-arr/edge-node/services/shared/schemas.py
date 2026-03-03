@@ -137,3 +137,105 @@ class HealthResponse(BaseModel):
     db: str
     redis: str
     version: str
+
+
+# ---------------------------------------------------------------------------
+# Auth schemas
+# ---------------------------------------------------------------------------
+
+
+class RegisterRequest(BaseModel):
+    """Body for POST /v1/auth/register."""
+
+    email: str = Field(max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(min_length=1, max_length=255)
+    invite_code: str = Field(min_length=1, max_length=50)
+
+
+class EmailLoginRequest(BaseModel):
+    """Body for POST /v1/auth/login."""
+
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    """Response for login/register endpoints."""
+
+    user_id: uuid.UUID
+    api_key: str
+    name: str
+    role: str
+    tier: str
+
+
+class UserResponse(BaseModel):
+    """Public user info (no secrets)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    email: str | None = None
+    role: str
+    tier: str
+    is_active: bool
+    storage_quota_gb: float
+    storage_used_gb: float
+    max_concurrent_jobs: int
+    max_requests_per_day: int
+    created_at: datetime
+    last_login: datetime | None = None
+
+
+class SetupRequest(BaseModel):
+    """Body for POST /v1/auth/setup — onboarding wizard."""
+
+    rd_api_token: str | None = None
+    preferred_resolution: int | None = Field(None, ge=240, le=8640)
+    allow_4k: bool | None = None
+
+
+class InviteCreate(BaseModel):
+    """Body for POST /v1/admin/invites."""
+
+    tier: str = "starter"
+    max_uses: int = Field(default=1, ge=1, le=100)
+    expires_in_days: int | None = Field(None, ge=1, le=365)
+
+
+class InviteResponse(BaseModel):
+    """Response for invite endpoints."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    tier: str
+    max_uses: int
+    times_used: int
+    expires_at: datetime | None = None
+    is_active: bool
+    created_at: datetime
+
+
+class AdminStatsResponse(BaseModel):
+    """Response for GET /v1/admin/stats."""
+
+    total_users: int
+    active_users: int
+    total_jobs: int
+    jobs_by_state: dict[str, int]
+    storage_used_gb: float
+
+
+class AdminUserUpdate(BaseModel):
+    """Body for PUT /v1/admin/users/{id}."""
+
+    role: str | None = None
+    tier: str | None = None
+    is_active: bool | None = None
+    storage_quota_gb: float | None = None
+    max_concurrent_jobs: int | None = None
+    max_requests_per_day: int | None = None

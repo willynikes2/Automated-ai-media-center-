@@ -40,6 +40,19 @@ class JobState(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    USER = "user"
+    RESELLER = "reseller"
+
+
+class UserTier(str, enum.Enum):
+    STARTER = "starter"
+    PRO = "pro"
+    FAMILY = "family"
+    POWER = "power"
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -52,6 +65,23 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(255))
     api_key: Mapped[str] = mapped_column(String(255), unique=True, default=lambda: secrets.token_urlsafe(32))
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(20), default=UserRole.USER)
+    tier: Mapped[str] = mapped_column(String(20), default=UserTier.STARTER)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    storage_quota_gb: Mapped[float] = mapped_column(default=100.0)
+    storage_used_gb: Mapped[float] = mapped_column(default=0.0)
+    rd_api_token_enc: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    usenet_config_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    jellyfin_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jellyfin_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    max_concurrent_jobs: Mapped[int] = mapped_column(default=2)
+    max_requests_per_day: Mapped[int] = mapped_column(default=10)
+    requests_today: Mapped[int] = mapped_column(default=0)
+    requests_reset_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_login: Mapped[datetime | None] = mapped_column(nullable=True)
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     prefs: Mapped[list["Prefs"]] = relationship(back_populates="user", lazy="noload")
     jobs: Mapped[list["Job"]] = relationship(back_populates="user", lazy="noload")
@@ -134,6 +164,20 @@ class Blacklist(Base):
     release_hash: Mapped[str] = mapped_column(String(255))
     release_title: Mapped[str] = mapped_column(String(1000))
     reason: Mapped[str] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+
+
+class Invite(Base):
+    __tablename__ = "invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    code: Mapped[str] = mapped_column(String(50), unique=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    tier: Mapped[str] = mapped_column(String(20), default=UserTier.STARTER)
+    max_uses: Mapped[int] = mapped_column(default=1)
+    times_used: Mapped[int] = mapped_column(default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
 
 

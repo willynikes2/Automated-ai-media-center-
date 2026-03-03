@@ -86,6 +86,10 @@ class Settings(BaseSettings):
 
     # Jellyfin
     jellyfin_url: str = "http://jellyfin:8096"
+    jellyfin_admin_token: str = ""
+
+    # Encryption (for storing user secrets at rest)
+    encryption_key: str = ""
 
     # UIDs
     puid: int = 1000
