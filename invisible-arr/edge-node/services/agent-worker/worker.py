@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from sqlalchemy import select, update as sa_update
 
 from shared.config import get_config
@@ -302,16 +303,68 @@ async def acquire(
         )
 
 
+def _resolve_magnet(candidate: ParsedRelease) -> str:
+    """Return a magnet: URI from the candidate, constructing one from info_hash if needed."""
+    link = candidate.magnet_link
+    if link.startswith("magnet:"):
+        return link
+    # If we have an info_hash, construct a magnet URI
+    if candidate.info_hash:
+        return f"magnet:?xt=urn:btih:{candidate.info_hash}&dn={candidate.title}"
+    # Otherwise, the link is likely a Prowlarr download redirect — return as-is
+    return link
+
+
+async def _resolve_download_url(url: str) -> str:
+    """Follow a Prowlarr download URL to extract the actual magnet link."""
+    # Don't follow redirects automatically — we need to catch magnet: redirects
+    async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as http:
+        resp = await http.get(url)
+
+        # Check for redirect to magnet: URI
+        if resp.is_redirect:
+            location = resp.headers.get("location", "")
+            if location.startswith("magnet:"):
+                return location
+            # Follow the redirect and try again
+            resp = await http.get(location, follow_redirects=True)
+
+        final_url = str(resp.url)
+        if final_url.startswith("magnet:"):
+            return final_url
+
+        # Check response body for magnet link
+        text = resp.text
+        if "magnet:?" in text:
+            import re
+            match = re.search(r'(magnet:\?[^\s"<]+)', text)
+            if match:
+                return match.group(1)
+
+    raise ValueError(f"Could not extract magnet from download URL (status={resp.status_code})")
+
+
 async def acquire_via_rd(job: Job, candidate: ParsedRelease) -> None:
     """Acquire a release through Real-Debrid, download files, then import."""
     config = get_config()
 
     async with RealDebridClient(config.rd_api_token) as rd:
+        # -- Resolve magnet link ---------------------------------------------
+        magnet = _resolve_magnet(candidate)
+
+        if not magnet.startswith("magnet:"):
+            await transition(job, JobState.ACQUIRING, "Resolving download URL to magnet")
+            try:
+                magnet = await _resolve_download_url(magnet)
+            except Exception as exc:
+                await transition(job, JobState.FAILED, f"Failed to resolve download URL: {exc}")
+                return
+
         # -- Add magnet ------------------------------------------------------
         await transition(job, JobState.ACQUIRING, "Adding magnet to Real-Debrid")
 
         try:
-            torrent_id = await rd.add_magnet(candidate.magnet_link)
+            torrent_id = await rd.add_magnet(magnet)
         except Exception as exc:
             await transition(job, JobState.FAILED, f"RD add_magnet failed: {exc}")
             return
