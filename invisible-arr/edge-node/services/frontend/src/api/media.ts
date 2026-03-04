@@ -40,24 +40,34 @@ export async function getTMDBDetail(type: 'movie' | 'tv', id: number) {
   return res.data;
 }
 
-// Jellyfin library
-export async function getLatestMedia() {
-  const res = await jellyfinApi.get('/Items/Latest', { params: { Limit: 20 } });
+// User library (per-user, disk-based)
+export interface LibraryItem {
+  title: string;
+  year: number | null;
+  media_type: 'movie' | 'tv';
+  file_path: string;
+  file_name: string;
+  size_bytes: number;
+  folder: string;
+}
+
+export interface LibraryResponse {
+  items: LibraryItem[];
+  total: number;
+  movies_count: number;
+  tv_count: number;
+}
+
+export async function getLibraryItems(mediaType?: 'movie' | 'tv'): Promise<LibraryResponse> {
+  const params: Record<string, string> = {};
+  if (mediaType) params.media_type = mediaType;
+  const res = await agentApi.get('/v1/library', { params });
   return res.data;
 }
 
-export async function getLibraryItems(type: 'Movie' | 'Series', params: Record<string, unknown> = {}) {
-  const res = await jellyfinApi.get('/Items', {
-    params: {
-      IncludeItemTypes: type,
-      Recursive: true,
-      SortBy: 'DateCreated,SortName',
-      SortOrder: 'Descending',
-      Limit: 50,
-      Fields: 'Overview,Genres,DateCreated,MediaSources',
-      ...params,
-    },
-  });
+// Jellyfin (still used for latest/playback)
+export async function getLatestMedia() {
+  const res = await jellyfinApi.get('/Items/Latest', { params: { Limit: 20 } });
   return res.data;
 }
 
@@ -83,5 +93,43 @@ export interface StorageInfo {
 
 export async function getStorageInfo(): Promise<StorageInfo> {
   const res = await agentApi.get('/v1/storage');
+  return res.data;
+}
+
+// TV season/episode data
+export interface TVSeason {
+  season_number: number;
+  name: string;
+  episode_count: number;
+  air_date: string | null;
+}
+
+export interface TVEpisode {
+  episode_number: number;
+  name: string;
+  air_date: string | null;
+  overview: string;
+  still_path: string | null;
+  runtime: number | null;
+}
+
+export interface TVSeasonsResponse {
+  seasons: TVSeason[];
+  number_of_seasons: number;
+}
+
+export interface TVSeasonDetail {
+  season_number: number;
+  name: string;
+  episodes: TVEpisode[];
+}
+
+export async function getTVSeasons(tmdbId: number): Promise<TVSeasonsResponse> {
+  const res = await agentApi.get(`/v1/tmdb/tv/${tmdbId}/seasons`);
+  return res.data;
+}
+
+export async function getTVSeasonDetail(tmdbId: number, seasonNumber: number): Promise<TVSeasonDetail> {
+  const res = await agentApi.get(`/v1/tmdb/tv/${tmdbId}/season/${seasonNumber}`);
   return res.data;
 }

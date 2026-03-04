@@ -9,13 +9,14 @@ from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from dependencies import require_admin
 from shared.config import get_config
 from shared.database import get_session_factory
 from shared.models import Invite, Job, User
+from shared.radarr_client import RadarrClient
 from shared.schemas import (
     AdminStatsResponse,
     AdminUserUpdate,
@@ -23,6 +24,7 @@ from shared.schemas import (
     InviteResponse,
     UserResponse,
 )
+from shared.sonarr_client import SonarrClient
 
 logger = logging.getLogger("agent-api.admin")
 router = APIRouter()
@@ -46,6 +48,20 @@ class VPNStatusResponse(BaseModel):
     connected: bool = False
     public_ip: str | None = None
     provider: str | None = None
+
+
+class ArrServiceDiagnostics(BaseModel):
+    service: str
+    system_status: dict | None = None
+    quality_profiles: list[dict] = Field(default_factory=list)
+    root_folders: list[dict] = Field(default_factory=list)
+    download_clients: list[dict] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ArrDiagnosticsResponse(BaseModel):
+    radarr: ArrServiceDiagnostics
+    sonarr: ArrServiceDiagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +121,38 @@ async def get_vpn_status(user: User = Depends(require_admin)) -> VPNStatusRespon
         enabled=True,
         connected=False,
         provider=config.vpn_provider or None,
+    )
+
+
+@router.get("/admin/arr-diagnostics", response_model=ArrDiagnosticsResponse)
+async def get_arr_diagnostics(user: User = Depends(require_admin)) -> ArrDiagnosticsResponse:
+    """Return Sonarr/Radarr config snapshots to debug add/import failures quickly."""
+    radarr_diag = ArrServiceDiagnostics(service="radarr")
+    sonarr_diag = ArrServiceDiagnostics(service="sonarr")
+
+    try:
+        async with RadarrClient() as radarr:
+            radarr_diag.system_status = await radarr.system_status()
+            radarr_diag.quality_profiles = await radarr.get_quality_profiles()
+            radarr_diag.root_folders = await radarr.get_root_folders()
+            radarr_diag.download_clients = await radarr.get_download_clients()
+    except Exception as exc:
+        logger.exception("Failed to collect Radarr diagnostics")
+        radarr_diag.error = str(exc)
+
+    try:
+        async with SonarrClient() as sonarr:
+            sonarr_diag.system_status = await sonarr.system_status()
+            sonarr_diag.quality_profiles = await sonarr.get_quality_profiles()
+            sonarr_diag.root_folders = await sonarr.get_root_folders()
+            sonarr_diag.download_clients = await sonarr.get_download_clients()
+    except Exception as exc:
+        logger.exception("Failed to collect Sonarr diagnostics")
+        sonarr_diag.error = str(exc)
+
+    return ArrDiagnosticsResponse(
+        radarr=radarr_diag,
+        sonarr=sonarr_diag,
     )
 
 

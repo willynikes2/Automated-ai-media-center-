@@ -84,6 +84,17 @@ class Settings(BaseSettings):
     radarr_url: str = "http://radarr:7878"
     radarr_api_key: str = ""
 
+    # rdt-client (Real-Debrid proxy)
+    rdt_client_url: str = "http://rdt-client:6500"
+    rdt_client_username: str = "admin"
+    rdt_client_password: str = "admin123"
+    rdt_webhook_token: str = ""
+
+    # Zurg streaming (optional)
+    zurg_enabled: bool = False
+    zurg_mount_path: str = "/data/zurg/__all__"
+    zurg_base_url: str = ""
+
     # Jellyfin
     jellyfin_url: str = "http://jellyfin:8096"
     jellyfin_admin_token: str = ""

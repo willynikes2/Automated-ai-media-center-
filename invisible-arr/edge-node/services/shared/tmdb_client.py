@@ -137,6 +137,95 @@ class TMDBClient:
         )
         return tmdb_id, title, year
 
+    # -- TV seasons/episodes -----------------------------------------------
+
+    async def get_tv_seasons(self, tmdb_id: int) -> list[dict]:
+        """Return season summaries for a TV show.
+
+        Each dict has: season_number, name, episode_count, air_date, overview.
+        Excludes specials (season 0).
+        """
+        data = await self.get_tv(tmdb_id)
+        seasons: list[dict] = []
+        for s in data.get("seasons", []):
+            if s.get("season_number", 0) == 0:
+                continue  # skip specials
+            seasons.append({
+                "season_number": s["season_number"],
+                "name": s.get("name", f"Season {s['season_number']}"),
+                "episode_count": s.get("episode_count", 0),
+                "air_date": s.get("air_date"),
+                "overview": s.get("overview", ""),
+            })
+        return seasons
+
+    async def get_season_detail(self, tmdb_id: int, season_number: int) -> dict:
+        """Fetch episode list for a specific season.
+
+        Returns dict with: season_number, name, episodes (list of episode dicts).
+        """
+        resp = await self._client.get(f"/tv/{tmdb_id}/season/{season_number}")
+        resp.raise_for_status()
+        data: dict = resp.json()
+        episodes = []
+        for ep in data.get("episodes", []):
+            episodes.append({
+                "episode_number": ep["episode_number"],
+                "name": ep.get("name", ""),
+                "air_date": ep.get("air_date"),
+                "overview": ep.get("overview", ""),
+                "still_path": ep.get("still_path"),
+                "runtime": ep.get("runtime"),
+            })
+        return {
+            "season_number": data.get("season_number", season_number),
+            "name": data.get("name", f"Season {season_number}"),
+            "episodes": episodes,
+        }
+
+    # -- external IDs ------------------------------------------------------
+
+    async def get_external_ids(self, tmdb_id: int, media_type: str) -> dict:
+        """GET /{media_type}/{id}/external_ids — returns tvdb_id, imdb_id, etc."""
+        endpoint = "movie" if media_type == "movie" else "tv"
+        resp = await self._client.get(f"/{endpoint}/{tmdb_id}/external_ids")
+        resp.raise_for_status()
+        return resp.json()
+
+    # -- alternate titles --------------------------------------------------
+
+    async def get_alternative_titles(
+        self, tmdb_id: int, media_type: str
+    ) -> list[str]:
+        """Fetch alternative/international titles for a movie or TV show.
+
+        Returns a list of title strings (max 10). Empty list on error.
+        """
+        try:
+            if media_type == "movie":
+                resp = await self._client.get(
+                    f"/movie/{tmdb_id}/alternative_titles"
+                )
+                resp.raise_for_status()
+                return [
+                    t["title"]
+                    for t in resp.json().get("titles", [])[:10]
+                    if t.get("title")
+                ]
+            else:
+                resp = await self._client.get(
+                    f"/tv/{tmdb_id}/alternative_titles"
+                )
+                resp.raise_for_status()
+                return [
+                    t["title"]
+                    for t in resp.json().get("results", [])[:10]
+                    if t.get("title")
+                ]
+        except Exception:
+            logger.debug("Failed to fetch alternative titles for TMDB %d", tmdb_id)
+            return []
+
     # -- lifecycle ---------------------------------------------------------
 
     async def close(self) -> None:

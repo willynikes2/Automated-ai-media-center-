@@ -23,6 +23,7 @@ from shared.config import get_config  # noqa: E402
 from shared.database import init_db, get_engine, get_session_factory  # noqa: E402
 from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E402
 
+from monitor import monitor_downloads  # noqa: E402
 from worker import process_job  # noqa: E402
 
 MAX_RETRIES = 5
@@ -83,6 +84,7 @@ async def _run() -> None:
 
     # Consumer loop ----------------------------------------------------------
     logger.info("Entering job consumer loop")
+    monitor_task = asyncio.create_task(monitor_downloads(_shutdown_event))
     while not _shutdown_event.is_set():
         try:
             job_id = await dequeue_job(timeout=2)
@@ -113,6 +115,12 @@ async def _run() -> None:
             logger.exception("Error checking retry for job %s", job_id)
 
     # Shutdown cleanup -------------------------------------------------------
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
+
     logger.info("Shutting down agent-worker")
     await redis.aclose()
     engine = get_engine()
@@ -121,7 +129,7 @@ async def _run() -> None:
 
 
 async def _maybe_retry(job_id: str) -> None:
-    """If a job is FAILED and under the retry limit, re-enqueue it after a delay."""
+    """If a job is FAILED and under the retry limit, handle Arr cleanup and re-enqueue."""
     from shared.models import Job, JobState, JobEvent  # noqa: E402
     from sqlalchemy import select
     from sqlalchemy import update as sa_update
@@ -143,33 +151,80 @@ async def _maybe_retry(job_id: str) -> None:
         new_count = job.retry_count + 1
         delay = RETRY_DELAYS[min(new_count - 1, len(RETRY_DELAYS) - 1)]
 
-        # Reset to CREATED and bump retry count
+        # --- Smart retry analysis ---
+        strategy_note = ""
+        should_blacklist = True
+        should_re_search = True
+        try:
+            from smart_retry import analyze_failure
+
+            strategy = await analyze_failure(job_id)
+            if strategy is not None:
+                should_blacklist = strategy.blacklist_queue_item
+                should_re_search = strategy.trigger_re_search
+                strategy_note = f" [smart: {strategy.reasoning[:80]}]"
+        except Exception:
+            logger.exception("Smart retry analysis failed for job %s, using dumb retry", job_id)
+
+        # --- Arr cleanup: blacklist failed queue item and optionally re-search ---
+        try:
+            if job.arr_queue_id:
+                if job.radarr_movie_id:
+                    from shared.radarr_client import RadarrClient
+                    async with RadarrClient() as radarr:
+                        await radarr.delete_queue_item(
+                            job.arr_queue_id,
+                            blacklist=should_blacklist,
+                        )
+                        if should_re_search and job.radarr_movie_id:
+                            await radarr.search_movie(job.radarr_movie_id)
+                elif job.sonarr_series_id:
+                    from shared.sonarr_client import SonarrClient
+                    async with SonarrClient() as sonarr:
+                        await sonarr.delete_queue_item(
+                            job.arr_queue_id,
+                            blacklist=should_blacklist,
+                        )
+                        if should_re_search:
+                            if job.season is not None:
+                                await sonarr.search_season(job.sonarr_series_id, job.season)
+                            else:
+                                await sonarr.search_series(job.sonarr_series_id)
+        except Exception:
+            logger.exception("Failed to cleanup Arr queue for job %s", job_id)
+
+        # Reset to CREATED and bump retry count (clear arr_queue_id for fresh monitoring)
         now = datetime.utcnow()
         await session.execute(
             sa_update(Job).where(Job.id == job.id).values(
                 state=JobState.CREATED.value,
                 retry_count=new_count,
+                arr_queue_id=None,
                 updated_at=now,
             )
         )
         event = JobEvent(
             job_id=job.id,
             state=JobState.CREATED.value,
-            message=f"Auto-retry #{new_count}/{MAX_RETRIES} (waiting {delay}s)",
+            message=f"Auto-retry #{new_count}/{MAX_RETRIES} (waiting {delay}s){strategy_note}",
             created_at=now,
         )
         session.add(event)
         await session.commit()
 
-    logger.info("Job %s: scheduling retry #%d in %ds", job_id, new_count, delay)
-    await asyncio.sleep(delay)
+    logger.info("Job %s: scheduling retry #%d in %ds%s", job_id, new_count, delay, strategy_note)
 
-    if _shutdown_event.is_set():
-        logger.info("Shutdown requested, skipping retry for job %s", job_id)
-        return
+    # Schedule the delayed re-enqueue in the background so we don't block
+    # the consumer loop from processing other jobs.
+    async def _delayed_enqueue() -> None:
+        await asyncio.sleep(delay)
+        if _shutdown_event.is_set():
+            logger.info("Shutdown requested, skipping retry for job %s", job_id)
+            return
+        await enqueue_job(job_id)
+        logger.info("Job %s re-enqueued for retry #%d", job_id, new_count)
 
-    await enqueue_job(job_id)
-    logger.info("Job %s re-enqueued for retry #%d", job_id, new_count)
+    asyncio.create_task(_delayed_enqueue())
 
 
 async def _fail_job(job_id: str) -> None:

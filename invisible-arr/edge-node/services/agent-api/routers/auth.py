@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime
+from pathlib import Path
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,9 +13,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from dependencies import get_current_user
+from shared.config import get_config
 from shared.database import get_session_factory
 from shared.encryption import encrypt
+from shared.jellyfin_client import JellyfinAdmin
 from shared.models import Invite, Prefs, User
+from shared.radarr_client import RadarrClient
+from shared.sonarr_client import SonarrClient
 from shared.schemas import (
     AuthResponse,
     EmailLoginRequest,
@@ -25,6 +31,51 @@ from shared.tiers import get_tier_limits
 
 logger = logging.getLogger("agent-api.auth")
 router = APIRouter()
+
+# Trash Guides quality profile IDs (created by Recyclarr)
+# "HD Bluray + WEB" in Radarr, "WEB-1080p" in Sonarr
+RADARR_QUALITY_PROFILE_ID = 7
+SONARR_QUALITY_PROFILE_ID = 7
+
+
+async def _provision_arr_root_folders(user_id: uuid.UUID) -> tuple[int | None, int | None]:
+    """Register per-user root folders in Sonarr/Radarr. Returns (radarr_id, sonarr_id)."""
+    config = get_config()
+    user_media = f"/data/media/users/{user_id}"
+    radarr_id = sonarr_id = None
+
+    try:
+        async with RadarrClient() as radarr:
+            # Check if folder already registered
+            existing = await radarr.get_root_folders()
+            movie_path = f"{user_media}/Movies"
+            for rf in existing:
+                if rf["path"] == movie_path:
+                    radarr_id = rf["id"]
+                    break
+            if radarr_id is None:
+                result = await radarr.add_root_folder(movie_path)
+                radarr_id = result["id"]
+                logger.info("Registered Radarr root folder: %s (id=%d)", movie_path, radarr_id)
+    except Exception:
+        logger.exception("Failed to register Radarr root folder for user %s", user_id)
+
+    try:
+        async with SonarrClient() as sonarr:
+            existing = await sonarr.get_root_folders()
+            tv_path = f"{user_media}/TV"
+            for rf in existing:
+                if rf["path"] == tv_path:
+                    sonarr_id = rf["id"]
+                    break
+            if sonarr_id is None:
+                result = await sonarr.add_root_folder(tv_path)
+                sonarr_id = result["id"]
+                logger.info("Registered Sonarr root folder: %s (id=%d)", tv_path, sonarr_id)
+    except Exception:
+        logger.exception("Failed to register Sonarr root folder for user %s", user_id)
+
+    return radarr_id, sonarr_id
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +162,33 @@ async def register(body: RegisterRequest):
         await session.commit()
         await session.refresh(user)
 
+    # Provision per-user media directories and Arr root folders
+    try:
+        config = get_config()
+        user_media = Path(config.media_path) / "users" / str(user.id)
+        (user_media / "Movies").mkdir(parents=True, exist_ok=True)
+        (user_media / "TV").mkdir(parents=True, exist_ok=True)
+
+        radarr_rf_id, sonarr_rf_id = await _provision_arr_root_folders(user.id)
+        if radarr_rf_id or sonarr_rf_id:
+            async with factory() as session:
+                result = await session.execute(select(User).where(User.id == user.id))
+                db_user = result.scalar_one()
+                if radarr_rf_id:
+                    db_user.radarr_root_folder_id = radarr_rf_id
+                if sonarr_rf_id:
+                    db_user.sonarr_root_folder_id = sonarr_rf_id
+                await session.commit()
+    except Exception:
+        logger.exception("Failed to provision media folders for %s", user.name)
+
     return AuthResponse(
         user_id=user.id,
         api_key=user.api_key,
         name=user.name,
         role=user.role,
         tier=user.tier,
+        setup_complete=user.setup_complete,
     )
 
 
@@ -127,21 +199,24 @@ async def register(body: RegisterRequest):
 
 @router.post("/auth/login", response_model=AuthResponse)
 async def login(body: EmailLoginRequest):
-    """Authenticate with email and password."""
+    """Authenticate with email/username and password."""
     factory = get_session_factory()
     async with factory() as session:
+        # Try email first, then fall back to username
         result = await session.execute(
-            select(User).where(User.email == body.email)
+            select(User).where(
+                (User.email == body.email) | (User.name == body.email)
+            )
         )
         user: User | None = result.scalar_one_or_none()
 
         if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         if user.password_hash is None or not bcrypt.checkpw(
             body.password.encode(), user.password_hash.encode()
         ):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         user.last_login = datetime.utcnow()
         await session.commit()
@@ -153,6 +228,7 @@ async def login(body: EmailLoginRequest):
         name=user.name,
         role=user.role,
         tier=user.tier,
+        setup_complete=user.setup_complete,
     )
 
 
@@ -203,12 +279,47 @@ async def jellyfin_login(body: JellyfinLoginRequest):
         await session.commit()
         await session.refresh(user)
 
+    # Provision per-user media directories, Jellyfin libraries, and Arr root folders
+    try:
+        config = get_config()
+        user_media = Path(config.media_path) / "users" / str(user.id)
+        (user_media / "Movies").mkdir(parents=True, exist_ok=True)
+        (user_media / "TV").mkdir(parents=True, exist_ok=True)
+
+        jf = JellyfinAdmin()
+        if jf.enabled and user.role != "admin":
+            await jf.provision_user_libraries(
+                user_id=str(user.id),
+                username=user.name,
+                jellyfin_user_id=body.jellyfin_user_id,
+            )
+    except Exception:
+        logger.exception("Failed to provision Jellyfin libraries for %s", user.name)
+
+    # Register root folders in Sonarr/Radarr if not already done
+    if user.radarr_root_folder_id is None or user.sonarr_root_folder_id is None:
+        try:
+            radarr_rf_id, sonarr_rf_id = await _provision_arr_root_folders(user.id)
+            if radarr_rf_id or sonarr_rf_id:
+                factory = get_session_factory()
+                async with factory() as session:
+                    result = await session.execute(select(User).where(User.id == user.id))
+                    db_user = result.scalar_one()
+                    if radarr_rf_id:
+                        db_user.radarr_root_folder_id = radarr_rf_id
+                    if sonarr_rf_id:
+                        db_user.sonarr_root_folder_id = sonarr_rf_id
+                    await session.commit()
+        except Exception:
+            logger.exception("Failed to provision Arr root folders for %s", user.name)
+
     return AuthResponse(
         user_id=user.id,
         api_key=user.api_key,
         name=user.name,
         role=user.role,
         tier=user.tier,
+        setup_complete=user.setup_complete,
     )
 
 
@@ -257,6 +368,9 @@ async def setup(body: SetupRequest, user: User = Depends(get_current_user)):
             prefs.max_resolution = body.preferred_resolution
         if body.allow_4k is not None:
             prefs.allow_4k = body.allow_4k
+
+        # Mark setup as complete
+        db_user.setup_complete = True
 
         await session.commit()
 

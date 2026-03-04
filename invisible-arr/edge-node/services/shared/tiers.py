@@ -5,7 +5,7 @@ TIER_LIMITS: dict[str, dict] = {
         "storage_quota_gb": 100,
         "max_resolution": 1080,
         "allow_4k": False,
-        "max_concurrent_jobs": 2,
+        "max_concurrent_jobs": 5,
         "max_requests_per_day": 10,
         "max_movie_size_gb": 3.0,
         "max_episode_size_gb": 1.0,

@@ -57,10 +57,7 @@ async def search_releases(
     available_downloaders: list[str] = []
     if config.rd_enabled and config.rd_api_token:
         available_downloaders.append("rd")
-    if config.vpn_enabled:
-        available_downloaders.append("torrent")
-    # Torrent is always technically possible (Prowlarr returns magnets)
-    if "torrent" not in available_downloaders:
+    if config.torrent_enabled:
         available_downloaders.append("torrent")
 
     # Storage info

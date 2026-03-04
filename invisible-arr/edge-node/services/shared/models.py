@@ -31,6 +31,7 @@ def _new_uuid() -> uuid.UUID:
 class JobState(str, enum.Enum):
     CREATED = "CREATED"
     RESOLVING = "RESOLVING"
+    ADDING = "ADDING"        # Added to Sonarr/Radarr, waiting for grab
     SEARCHING = "SEARCHING"
     SELECTED = "SELECTED"
     ACQUIRING = "ACQUIRING"
@@ -83,10 +84,13 @@ class User(Base):
     usenet_config_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     jellyfin_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jellyfin_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    radarr_root_folder_id: Mapped[int | None] = mapped_column(nullable=True)
+    sonarr_root_folder_id: Mapped[int | None] = mapped_column(nullable=True)
     max_concurrent_jobs: Mapped[int] = mapped_column(default=2)
     max_requests_per_day: Mapped[int] = mapped_column(default=10)
     requests_today: Mapped[int] = mapped_column(default=0)
     requests_reset_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    setup_complete: Mapped[bool] = mapped_column(default=False)
     last_login: Mapped[datetime | None] = mapped_column(nullable=True)
     invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
@@ -137,6 +141,9 @@ class Job(Base):
     acquisition_mode: Mapped[str] = mapped_column(String(20), default="download")  # download | stream
     acquisition_method: Mapped[str | None] = mapped_column(String(20), default=None)  # rd, usenet, torrent
     streaming_urls: Mapped[dict | None] = mapped_column(type_=JSON, nullable=True, default=None)
+    sonarr_series_id: Mapped[int | None] = mapped_column(nullable=True)
+    radarr_movie_id: Mapped[int | None] = mapped_column(nullable=True)
+    arr_queue_id: Mapped[int | None] = mapped_column(nullable=True)
     retry_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -3,6 +3,7 @@ import type { JobState } from '@/api/jobs';
 const STATE_LABELS: Record<string, string> = {
   CREATED: 'Queued',
   RESOLVING: 'Looking up info',
+  ADDING: 'Adding to library',
   SEARCHING: 'Finding releases',
   SELECTED: 'Release found',
   ACQUIRING: 'Downloading',
@@ -15,6 +16,7 @@ const STATE_LABELS: Record<string, string> = {
 const stateColors: Record<string, string> = {
   CREATED: 'bg-text-tertiary/20 text-text-secondary',
   RESOLVING: 'bg-status-downloading/20 text-status-downloading',
+  ADDING: 'bg-blue-500/20 text-blue-400',
   SEARCHING: 'bg-status-downloading/20 text-status-downloading',
   SELECTED: 'bg-yellow-500/20 text-yellow-400',
   ACQUIRING: 'bg-orange-500/20 text-orange-400',
@@ -24,7 +26,7 @@ const stateColors: Record<string, string> = {
   FAILED: 'bg-status-failed/20 text-status-failed',
 };
 
-const ACTIVE_STATES = ['RESOLVING', 'SEARCHING', 'ACQUIRING', 'IMPORTING', 'VERIFYING'];
+const ACTIVE_STATES = ['RESOLVING', 'ADDING', 'SEARCHING', 'ACQUIRING', 'IMPORTING', 'VERIFYING'];
 
 export function Badge({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (

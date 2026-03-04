@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Star, Clock, Calendar, Play } from 'lucide-react';
+import { Star, Clock, Calendar, Play, ChevronDown, ChevronUp, Download, Tv } from 'lucide-react';
 import { backdropUrl, posterUrl } from '@/api/client';
 import { RequestButton } from './RequestButton';
 import { TrailerPlayer } from './TrailerPlayer';
+import { SeasonPicker } from './SeasonPicker';
 import { Button } from '@/components/ui/Button';
 
 interface Props {
@@ -177,6 +178,13 @@ export function MediaDetail({ detail, type }: Props) {
                 </Button>
               )}
             </div>
+
+            {/* Season/Episode picker for TV shows */}
+            {type === 'tv' && (
+              <div className="mt-6">
+                <SeasonPicker tmdbId={detail.id} title={title} />
+              </div>
+            )}
           </div>
         </div>
 

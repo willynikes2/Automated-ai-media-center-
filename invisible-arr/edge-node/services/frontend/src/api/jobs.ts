@@ -1,7 +1,7 @@
 import { agentApi } from './client';
 
 export type JobState =
-  | 'CREATED' | 'RESOLVING' | 'SEARCHING' | 'SELECTED'
+  | 'CREATED' | 'RESOLVING' | 'ADDING' | 'SEARCHING' | 'SELECTED'
   | 'ACQUIRING' | 'IMPORTING' | 'VERIFYING' | 'DONE' | 'FAILED';
 
 export interface SelectedCandidate {
@@ -28,6 +28,8 @@ export interface Job {
   rd_torrent_id: string | null;
   imported_path: string | null;
   acquisition_mode: 'download' | 'stream';
+  acquisition_method: string | null;
+  streaming_urls: Record<string, string> | null;
   retry_count: number;
   created_at: string;
   updated_at: string;
@@ -46,7 +48,7 @@ export interface JobDetail extends Job {
   events: JobEvent[];
 }
 
-export async function getJobs(params: { state?: string; limit?: number } = {}): Promise<Job[]> {
+export async function getJobs(params: { status?: string; limit?: number } = {}): Promise<Job[]> {
   const res = await agentApi.get('/v1/jobs', { params });
   return res.data;
 }
@@ -72,5 +74,31 @@ export async function createRequest(body: {
 
 export async function retryJob(id: string): Promise<Job> {
   const res = await agentApi.post(`/v1/jobs/${id}/retry`);
+  return res.data;
+}
+
+export async function cancelJob(id: string): Promise<Job> {
+  const res = await agentApi.post(`/v1/jobs/${id}/cancel`);
+  return res.data;
+}
+
+export interface JobProgress {
+  percent: number;
+  detail: string;
+}
+
+export async function getJobProgress(id: string): Promise<JobProgress> {
+  const res = await agentApi.get(`/v1/jobs/${id}/progress`);
+  return res.data;
+}
+
+export async function createBatchRequest(body: {
+  tmdb_id: number;
+  query: string;
+  seasons?: number[];
+  episodes?: { season: number; episode: number }[];
+  acquisition_mode?: 'download' | 'stream';
+}): Promise<Job[]> {
+  const res = await agentApi.post('/v1/request/batch', { ...body, media_type: 'tv' });
   return res.data;
 }

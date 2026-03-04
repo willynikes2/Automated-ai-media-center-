@@ -1,12 +1,10 @@
 import { useTrending, usePopular } from '@/hooks/useMedia';
-import { useJobs } from '@/hooks/useJobs';
 import { MediaRow } from '@/components/media/MediaGrid';
-import { MediaCard } from '@/components/media/MediaCard';
 import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
-import { backdropUrl, posterUrl } from '@/api/client';
+import { backdropUrl } from '@/api/client';
 import { Star, Download } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { TMDBResult } from '@/api/media';
 
 function HeroSection({ item }: { item: TMDBResult }) {
@@ -56,24 +54,10 @@ export function DiscoverPage() {
   const { data: trendingTV } = useTrending('tv');
   const { data: popularMovies } = usePopular('movie');
   const { data: popularTV } = usePopular('tv');
-  const { data: recentJobs } = useJobs({ limit: 10 });
 
   if (loadingTM) return <FullSpinner />;
 
   const hero = trendingMovies?.[0];
-  const recentlyRequested: TMDBResult[] = (recentJobs ?? [])
-    .filter((j) => j.tmdb_id != null)
-    .map((j) => ({
-      id: j.tmdb_id!,
-      title: j.media_type === 'movie' ? j.title : undefined,
-      name: j.media_type === 'tv' ? j.title : undefined,
-      overview: '',
-      poster_path: null,
-      backdrop_path: null,
-      vote_average: 0,
-      genre_ids: [],
-      media_type: j.media_type,
-    }));
 
   return (
     <div>

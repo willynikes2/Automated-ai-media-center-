@@ -190,6 +190,13 @@ if [ "${IPTV_ENABLED}" = "true" ]; then
         PROFILES="iptv"
     fi
 fi
+if [ "${USENET_ENABLED:-false}" = "true" ]; then
+    if [ -n "${PROFILES}" ]; then
+        PROFILES="${PROFILES},usenet"
+    else
+        PROFILES="usenet"
+    fi
+fi
 
 info "Building and starting services..."
 
@@ -269,6 +276,11 @@ fi
 if [ "${VPN_ENABLED}" = "true" ]; then
     QB_PORT="${QBITTORRENT_PORT:-8080}"
     echo "  qBittorrent: http://localhost:${QB_PORT}"
+fi
+
+if [ "${USENET_ENABLED:-false}" = "true" ]; then
+    SAB_PORT="${SABNZBD_PORT:-8081}"
+    echo "  SABnzbd:     http://localhost:${SAB_PORT}"
 fi
 
 if [ "${IPTV_ENABLED}" = "true" ]; then

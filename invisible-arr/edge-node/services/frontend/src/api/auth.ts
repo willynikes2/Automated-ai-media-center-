@@ -20,6 +20,7 @@ interface AuthResponse {
   name: string;
   role: UserRole;
   tier: UserTier;
+  setup_complete: boolean;
 }
 
 /* ── Return type for all login/register helpers ───────────────── */
@@ -31,6 +32,7 @@ export interface AuthResult {
   email: string | null;
   role: UserRole;
   tier: UserTier;
+  setupComplete: boolean;
   jellyfinToken?: string;
   jellyfinUserId?: string;
 }
@@ -45,6 +47,7 @@ function mapAuthResponse(data: AuthResponse, extra?: { email?: string; jellyfinT
     email: extra?.email ?? null,
     role: data.role,
     tier: data.tier,
+    setupComplete: data.setup_complete,
     jellyfinToken: extra?.jellyfinToken,
     jellyfinUserId: extra?.jellyfinUserId,
   };

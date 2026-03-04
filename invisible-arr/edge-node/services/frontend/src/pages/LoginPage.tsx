@@ -80,12 +80,12 @@ export function LoginPage() {
           {activeTab === 'email' ? (
             <>
               <Input
-                label="Email"
-                type="email"
+                label="Username or Email"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
+                placeholder="username or email"
+                autoComplete="username"
                 autoFocus
               />
               <Input

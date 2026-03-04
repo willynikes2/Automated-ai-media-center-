@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo } from '@/api/media';
+import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo, getTVSeasons, getTVSeasonDetail } from '@/api/media';
 
 export function useTMDBSearch(query: string, page = 1) {
   return useQuery({
@@ -43,10 +43,10 @@ export function useLatestMedia() {
   });
 }
 
-export function useLibrary(type: 'Movie' | 'Series', params: Record<string, unknown> = {}) {
+export function useLibrary(mediaType?: 'movie' | 'tv') {
   return useQuery({
-    queryKey: ['library', type, params],
-    queryFn: () => getLibraryItems(type, params),
+    queryKey: ['library', mediaType],
+    queryFn: () => getLibraryItems(mediaType),
     staleTime: 60_000,
   });
 }
@@ -65,6 +65,24 @@ export function useStorageInfo() {
     queryKey: ['storage-info'],
     queryFn: getStorageInfo,
     staleTime: 60_000,
+  });
+}
+
+export function useTVSeasons(tmdbId: number) {
+  return useQuery({
+    queryKey: ['tv-seasons', tmdbId],
+    queryFn: () => getTVSeasons(tmdbId),
+    enabled: !!tmdbId,
+    staleTime: 10 * 60_000,
+  });
+}
+
+export function useTVSeasonDetail(tmdbId: number, seasonNumber: number) {
+  return useQuery({
+    queryKey: ['tv-season-detail', tmdbId, seasonNumber],
+    queryFn: () => getTVSeasonDetail(tmdbId, seasonNumber),
+    enabled: !!tmdbId && seasonNumber > 0,
+    staleTime: 10 * 60_000,
   });
 }
 

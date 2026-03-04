@@ -26,6 +26,17 @@ class RequestCreate(BaseModel):
     acquisition_mode: Literal["download", "stream"] = "download"
 
 
+class BatchRequestCreate(BaseModel):
+    """Body for POST /v1/request/batch — request multiple seasons/episodes."""
+
+    query: str = Field(min_length=1, max_length=500)
+    tmdb_id: int | None = None
+    media_type: Literal["tv"] = "tv"
+    seasons: list[int] | None = None
+    episodes: list[dict] | None = None  # [{"season": 1, "episode": 5}, ...]
+    acquisition_mode: Literal["download", "stream"] = "download"
+
+
 class PrefsUpdate(BaseModel):
     """Body for PATCH /v1/prefs.  All fields optional."""
 
@@ -168,6 +179,7 @@ class AuthResponse(BaseModel):
     name: str
     role: str
     tier: str
+    setup_complete: bool = False
 
 
 class UserResponse(BaseModel):

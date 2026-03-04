@@ -1,10 +1,10 @@
-import { StateBadge } from '@/components/ui/Badge';
+import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { JobTimeline } from './JobTimeline';
-import { useRetryJob } from '@/hooks/useJobs';
+import { useRetryJob, useJobProgress } from '@/hooks/useJobs';
 import { toast } from '@/components/ui/Toast';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Cloud, HardDrive, Play } from 'lucide-react';
 import type { JobDetail as JobDetailType } from '@/api/jobs';
 
 const FRIENDLY_ERRORS: Record<string, string> = {
@@ -18,13 +18,43 @@ function friendlyError(message: string): string {
   return FRIENDLY_ERRORS[message] ?? message;
 }
 
+function AcquisitionInfo({ mode, method }: { mode: string; method?: string | null }) {
+  const icon = mode === 'stream'
+    ? <Play className="h-3.5 w-3.5" />
+    : method === 'usenet' || method === 'sabnzbd'
+    ? <HardDrive className="h-3.5 w-3.5" />
+    : <Cloud className="h-3.5 w-3.5" />;
+
+  const label = mode === 'stream'
+    ? 'Streaming (Zurg)'
+    : method === 'usenet' || method === 'sabnzbd'
+    ? 'Usenet (SABnzbd)'
+    : 'Real-Debrid (rdt-client)';
+
+  const color = mode === 'stream'
+    ? 'bg-purple-500/20 text-purple-400'
+    : method === 'usenet' || method === 'sabnzbd'
+    ? 'bg-blue-500/20 text-blue-400'
+    : 'bg-emerald-500/20 text-emerald-400';
+
+  return (
+    <Badge className={color}>
+      {icon}
+      <span className="ml-1">{label}</span>
+    </Badge>
+  );
+}
+
 export function JobDetailView({ job }: { job: JobDetailType }) {
   const retryMutation = useRetryJob();
+  const isDownloading = ['ACQUIRING', 'IMPORTING'].includes(job.state);
+  const { data: progressData } = useJobProgress(job.id, isDownloading);
+  const progress = progressData?.percent ?? -1;
 
   const handleRetry = () => {
     retryMutation.mutate(job.id, {
       onSuccess: () => toast('Job queued for retry', 'success'),
-      onError: () => toast('Failed to retry job', 'error'),
+      onError: () => toast('Failed to retry', 'error'),
     });
   };
 
@@ -35,7 +65,10 @@ export function JobDetailView({ job }: { job: JobDetailType }) {
       <div>
         <div className="flex items-start justify-between gap-4 mb-2">
           <h2 className="text-xl font-bold">{job.title}</h2>
-          <StateBadge state={job.state} />
+          <div className="flex items-center gap-2 shrink-0">
+            <AcquisitionInfo mode={job.acquisition_mode} method={job.acquisition_method} />
+            <StateBadge state={job.state} />
+          </div>
         </div>
         <p className="text-sm text-text-secondary">
           {job.media_type === 'tv' ? 'TV Show' : 'Movie'}
@@ -48,7 +81,7 @@ export function JobDetailView({ job }: { job: JobDetailType }) {
 
       {/* Pipeline */}
       <Card className="p-4">
-        <JobTimeline currentState={job.state} events={job.events} />
+        <JobTimeline currentState={job.state} events={job.events} progress={progress >= 0 ? progress : undefined} />
       </Card>
 
       {/* Selected release */}

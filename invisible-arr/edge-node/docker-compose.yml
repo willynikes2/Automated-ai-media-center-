@@ -54,6 +54,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
       - ${MEDIA_PATH:-./data/media}:/data/media:ro
+      - ${DATA_PATH:-./data}/zurg:/data/zurg:ro
       - ${RECORDINGS_PATH:-./data/recordings}:/data/recordings
     ports:
       - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
@@ -206,6 +207,34 @@ services:
     networks:
       - internal
 
+  rdt-client:
+    image: rogerfar/rdtclient:latest
+    container_name: rdt-client
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - AGENT_API_URL=http://agent-api:8880
+      - RDT_WEBHOOK_TOKEN=${RDT_WEBHOOK_TOKEN:-}
+    volumes:
+      - ${CONFIG_PATH:-./config}/rdtclient:/data/db
+      - ${DATA_PATH:-./data}:/data
+      - ./scripts:/scripts:ro
+    networks:
+      - internal
+
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ${CONFIG_PATH:-./config}/recyclarr:/config
+    networks:
+      - internal
+
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
     container_name: sabnzbd
@@ -219,6 +248,8 @@ services:
       - ${DATA_PATH:-./data}/usenet:/data/usenet
     ports:
       - "127.0.0.1:${SABNZBD_PORT:-8081}:8080"
+    profiles:
+      - usenet
     networks:
       - internal
 
@@ -343,6 +374,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
+      - ${MEDIA_PATH:-./data/media}:/data/media:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -354,6 +386,7 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
+      - RDT_WEBHOOK_TOKEN=${RDT_WEBHOOK_TOKEN:-}
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
       - SONARR_URL=http://sonarr:8989
@@ -418,6 +451,9 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - RD_API_TOKEN=${RD_API_TOKEN:-}
       - RD_ENABLED=${RD_ENABLED:-false}
+      - ZURG_ENABLED=${ZURG_ENABLED:-false}
+      - ZURG_MOUNT_PATH=${ZURG_MOUNT_PATH:-/data/zurg/__all__}
+      - ZURG_BASE_URL=${ZURG_BASE_URL:-}
       - TORRENT_ENABLED=${TORRENT_ENABLED:-true}
       - USENET_ENABLED=${USENET_ENABLED:-false}
       - SABNZBD_URL=http://sabnzbd:8080
@@ -442,6 +478,7 @@ services:
       - DOWNLOADS_PATH=/data/downloads
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - JELLYFIN_URL=http://jellyfin:8096
+      - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
       - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
       - ENV=${ENV:-dev}
     networks:

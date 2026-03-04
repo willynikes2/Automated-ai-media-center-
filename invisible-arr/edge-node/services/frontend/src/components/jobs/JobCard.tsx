@@ -1,6 +1,17 @@
 import { Link } from 'react-router-dom';
-import { StateBadge } from '@/components/ui/Badge';
+import { StateBadge, Badge } from '@/components/ui/Badge';
+import { Cloud, HardDrive, Play } from 'lucide-react';
 import type { Job } from '@/api/jobs';
+
+function ModeBadge({ mode, method }: { mode: string; method?: string | null }) {
+  if (mode === 'stream') {
+    return <Badge className="bg-purple-500/20 text-purple-400"><Play className="h-2.5 w-2.5 mr-0.5" />Stream</Badge>;
+  }
+  if (method === 'usenet' || method === 'sabnzbd') {
+    return <Badge className="bg-blue-500/20 text-blue-400"><HardDrive className="h-2.5 w-2.5 mr-0.5" />Usenet</Badge>;
+  }
+  return <Badge className="bg-emerald-500/20 text-emerald-400"><Cloud className="h-2.5 w-2.5 mr-0.5" />RD</Badge>;
+}
 
 export function JobCard({ job }: { job: Job }) {
   const isActive = !['DONE', 'FAILED'].includes(job.state);
@@ -17,7 +28,10 @@ export function JobCard({ job }: { job: Job }) {
               {job.episode != null && `E${String(job.episode).padStart(2, '0')}`}
             </p>
           </div>
-          <StateBadge state={job.state} />
+          <div className="flex items-center gap-1.5 shrink-0">
+            <ModeBadge mode={job.acquisition_mode} method={job.acquisition_method} />
+            <StateBadge state={job.state} />
+          </div>
         </div>
 
         {job.selected_candidate && (

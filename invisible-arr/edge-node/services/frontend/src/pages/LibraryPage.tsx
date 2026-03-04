@@ -1,16 +1,18 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useLibrary, useStorageInfo } from '@/hooks/useMedia';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Library, HardDrive } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Library, HardDrive, Film, Tv } from 'lucide-react';
+import type { LibraryItem } from '@/api/media';
 
 const tabs = [
-  { key: 'Movie', label: 'Movies' },
-  { key: 'Series', label: 'TV Shows' },
+  { key: 'all', label: 'All' },
+  { key: 'movie', label: 'Movies' },
+  { key: 'tv', label: 'TV Shows' },
 ] as const;
 
-type SortKey = 'DateCreated' | 'SortName' | 'ProductionYear';
+type Tab = (typeof tabs)[number]['key'];
 
 function StorageBar({ usedGb, totalGb }: { usedGb: number; totalGb: number }) {
   if (totalGb <= 0) return null;
@@ -30,51 +32,55 @@ function StorageBar({ usedGb, totalGb }: { usedGb: number; totalGb: number }) {
   );
 }
 
-function ResolutionOverlay({ item }: { item: any }) {
-  const stream = item.MediaSources?.[0]?.MediaStreams?.find((s: any) => s.Type === 'Video');
-  const width = stream?.Width ?? 0;
-  let label = '';
-  let cls = '';
-  if (width >= 3800) { label = '4K'; cls = 'bg-yellow-500/90'; }
-  else if (width >= 1900) { label = '1080p'; cls = 'bg-blue-500/90'; }
-  else if (width >= 1200) { label = '720p'; cls = 'bg-green-500/90'; }
-  if (!label) return null;
+function formatSize(bytes: number): string {
+  if (bytes <= 0) return '';
+  const gb = bytes / (1024 ** 3);
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
+}
+
+function MediaCard({ item }: { item: LibraryItem }) {
+  const isMovie = item.media_type === 'movie';
+  const Icon = isMovie ? Film : Tv;
+
   return (
-    <span className={`absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white ${cls}`}>
-      {label}
-    </span>
+    <Link
+      to={`/search?q=${encodeURIComponent(item.title)}`}
+      className="group block rounded-xl overflow-hidden ring-1 ring-white/5 hover:ring-accent/30 transition-all"
+    >
+      <div className="relative aspect-[2/3] bg-bg-tertiary flex items-center justify-center">
+        <Icon className="h-12 w-12 text-text-tertiary/30" />
+        {item.year && (
+          <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white bg-accent/80">
+            {item.year}
+          </span>
+        )}
+      </div>
+      <div className="p-2">
+        <h3 className="text-sm font-medium truncate">{item.title}</h3>
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-text-tertiary capitalize">{item.media_type}</p>
+          {item.size_bytes > 0 && <p className="text-[10px] text-text-tertiary">{formatSize(item.size_bytes)}</p>}
+        </div>
+        <p className="text-[10px] text-text-tertiary/60 truncate mt-0.5">{item.file_name}</p>
+      </div>
+    </Link>
   );
 }
 
 export function LibraryPage() {
-  const [tab, setTab] = useState<'Movie' | 'Series'>('Movie');
-  const [sortBy, setSortBy] = useState<SortKey>('DateCreated');
-  const [resFilter, setResFilter] = useState<string>('any');
+  const [tab, setTab] = useState<Tab>('all');
   const { data: storageData } = useStorageInfo();
+  const mediaType = tab === 'all' ? undefined : (tab as 'movie' | 'tv');
+  const { data, isLoading } = useLibrary(mediaType);
 
-  const { data, isLoading } = useLibrary(tab, {
-    SortBy: `${sortBy},SortName`,
-    SortOrder: sortBy === 'SortName' ? 'Ascending' : 'Descending',
-    Limit: 100,
-  });
-
-  const items = data?.Items ?? [];
-
-  const filteredItems = useMemo(() => {
-    if (resFilter === 'any') return items;
-    return items.filter((item: any) => {
-      const width = item.MediaSources?.[0]?.MediaStreams?.find((s: any) => s.Type === 'Video')?.Width ?? 0;
-      if (resFilter === '4k') return width >= 3800;
-      if (resFilter === '1080p') return width >= 1900 && width < 3800;
-      if (resFilter === '720p') return width >= 1200 && width < 1900;
-      return true;
-    });
-  }, [items, resFilter]);
+  const items = data?.items ?? [];
+  const moviesCount = data?.movies_count ?? 0;
+  const tvCount = data?.tv_count ?? 0;
 
   return (
     <div className="px-4 md:px-8 py-6">
-      <h1 className="text-2xl font-bold mb-1">Library</h1>
-      <p className="text-sm text-text-secondary mb-4">Browse your media library.</p>
+      <h1 className="text-2xl font-bold mb-1">My Library</h1>
+      <p className="text-sm text-text-secondary mb-4">Your personal media collection.</p>
 
       {/* Storage bar */}
       {storageData && (
@@ -83,81 +89,42 @@ export function LibraryPage() {
         </div>
       )}
 
-      {/* Tabs + filters */}
+      {/* Tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
         <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                tab === t.key ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex gap-2 ml-auto">
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortKey)}
-            className="bg-bg-tertiary border border-white/10 rounded-lg px-3 py-1.5 text-xs text-text-primary"
-          >
-            <option value="DateCreated">Date Added</option>
-            <option value="SortName">Name</option>
-            <option value="ProductionYear">Year</option>
-          </select>
-          <select
-            value={resFilter}
-            onChange={(e) => setResFilter(e.target.value)}
-            className="bg-bg-tertiary border border-white/10 rounded-lg px-3 py-1.5 text-xs text-text-primary"
-          >
-            <option value="any">All Quality</option>
-            <option value="4k">4K</option>
-            <option value="1080p">1080p</option>
-            <option value="720p">720p</option>
-          </select>
+          {tabs.map((t) => {
+            const count = t.key === 'all' ? moviesCount + tvCount : t.key === 'movie' ? moviesCount : tvCount;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  tab === t.key ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {t.label}
+                {count > 0 && <span className="ml-1 text-xs opacity-70">({count})</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {isLoading ? (
         <FullSpinner />
-      ) : !filteredItems.length ? (
-        <EmptyState icon={Library} title="Nothing here yet" description={resFilter !== 'any' ? 'No items match your filter.' : 'Your library is empty.'} />
+      ) : !items.length ? (
+        <EmptyState
+          icon={Library}
+          title="Nothing here yet"
+          description="Request something from Discover to build your library."
+        />
       ) : (
         <>
-          <p className="text-xs text-text-tertiary mb-3">{filteredItems.length} items</p>
+          <p className="text-xs text-text-tertiary mb-3">{items.length} items</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {filteredItems.map((item: any) => {
-              const imgTag = item.ImageTags?.Primary;
-              const poster = imgTag
-                ? `/jellyfin/Items/${item.Id}/Images/Primary?maxHeight=400&tag=${imgTag}`
-                : null;
-              const sizeBytes = item.MediaSources?.[0]?.Size ?? 0;
-              const sizeGb = sizeBytes > 0 ? (sizeBytes / (1024 ** 3)).toFixed(1) : null;
-
-              return (
-                <Link key={item.Id} to={`/library/${item.Id}`} className="group block rounded-xl overflow-hidden hover:ring-1 hover:ring-accent/30 transition-all">
-                  <div className="relative aspect-[2/3] bg-bg-tertiary">
-                    {poster ? (
-                      <img src={poster} alt={item.Name} loading="lazy" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-text-tertiary text-sm">No Poster</div>
-                    )}
-                    <ResolutionOverlay item={item} />
-                  </div>
-                  <div className="p-2">
-                    <h3 className="text-sm font-medium truncate">{item.Name}</h3>
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs text-text-tertiary">{item.ProductionYear ?? ''}</p>
-                      {sizeGb && <p className="text-[10px] text-text-tertiary">{sizeGb} GB</p>}
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
+            {items.map((item) => (
+              <MediaCard key={item.file_path} item={item} />
+            ))}
           </div>
         </>
       )}

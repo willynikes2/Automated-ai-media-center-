@@ -2,11 +2,19 @@
 
 Produces Jellyfin/Plex-compatible folder structures:
 - Movies: ``Title (Year)/Title (Year).ext``
-- TV: ``Show/Season 01/Show - S01E01.ext``
+- TV: ``Show Title (Year)/Season 01/Show Title (Year) - S01E01.ext``
 """
 
 import re
 from pathlib import Path
+
+# Patterns to extract season/episode from filenames
+_SE_PATTERNS: list[re.Pattern[str]] = [
+    # S01E01, S01E01E02 (multi-ep → returns first episode)
+    re.compile(r'[Ss](\d{1,2})\s*[Ee](\d{1,3})'),
+    # 1x05
+    re.compile(r'(\d{1,2})x(\d{2,3})'),
+]
 
 
 def sanitize(name: str) -> str:
@@ -34,6 +42,19 @@ def validate_path(dest: Path, root: Path) -> Path:
     return resolved_dest
 
 
+def extract_episode_info(filename: str) -> tuple[int, int] | None:
+    """Extract (season, episode) from a filename.
+
+    Handles patterns like ``S01E05``, ``s02e10``, ``1x05``.
+    Returns ``None`` if no pattern matches.
+    """
+    for pat in _SE_PATTERNS:
+        m = pat.search(filename)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
 def movie_path(title: str, year: int, ext: str) -> Path:
     """Return the relative path for a movie file.
 
@@ -47,17 +68,22 @@ def movie_path(title: str, year: int, ext: str) -> Path:
     return Path(folder) / f"{clean} ({year}){ext}"
 
 
-def tv_path(show: str, season: int, episode: int, ext: str) -> Path:
+def tv_path(show: str, season: int, episode: int, ext: str,
+            year: int | None = None) -> Path:
     """Return the relative path for a TV episode file.
 
-    Example::
+    Examples::
+
+        >>> tv_path("Breaking Bad", 1, 1, ".mkv", year=2008)
+        PosixPath('Breaking Bad (2008)/Season 01/Breaking Bad (2008) - S01E01.mkv')
 
         >>> tv_path("Breaking Bad", 1, 1, ".mkv")
         PosixPath('Breaking Bad/Season 01/Breaking Bad - S01E01.mkv')
     """
     clean = sanitize(show)
+    label = f"{clean} ({year})" if year else clean
     return (
-        Path(clean)
+        Path(label)
         / f"Season {season:02d}"
-        / f"{clean} - S{season:02d}E{episode:02d}{ext}"
+        / f"{label} - S{season:02d}E{episode:02d}{ext}"
     )

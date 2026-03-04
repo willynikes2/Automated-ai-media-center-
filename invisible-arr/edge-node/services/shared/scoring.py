@@ -106,6 +106,43 @@ def parse_release_title(title: str) -> ParsedRelease:
     return p
 
 
+def _normalize_title(title: str) -> set[str]:
+    """Extract lowercase alphanumeric tokens from a title."""
+    return set(re.findall(r'[a-z0-9]+', title.lower()))
+
+
+def title_matches(release_title: str, canonical_title: str, year: int = 0) -> bool:
+    """Check if a release title is relevant to the requested media.
+
+    Returns True if the release title contains all significant words from
+    the canonical title.  Rejects obvious mismatches like "Scream VI" when
+    requesting "Scream 7", or "Poseidon" when requesting "Pose".
+    """
+    # Normalize both titles to lowercase token sets
+    release_tokens = _normalize_title(release_title)
+    canonical_tokens = _normalize_title(canonical_title)
+
+    # Remove very short/common tokens that cause false matches
+    noise = {'the', 'a', 'an', 'and', 'of', 'in', 'on', 'at', 'to', 'for', 'is', 'it', 'by'}
+    canonical_significant = canonical_tokens - noise
+
+    if not canonical_significant:
+        return True  # safety: don't filter if no significant tokens
+
+    # All significant canonical tokens must appear in the release title
+    matched = canonical_significant & release_tokens
+    if len(matched) < len(canonical_significant):
+        return False
+
+    # Year check: if the release contains a different 4-digit year, reject
+    if year > 0:
+        release_years = {int(t) for t in release_tokens if t.isdigit() and len(t) == 4 and 1900 <= int(t) <= 2099}
+        if release_years and year not in release_years:
+            return False
+
+    return True
+
+
 def score_candidate(parsed: ParsedRelease, prefs: dict) -> int:
     """Score a release candidate.  Higher is better.  Returns -1 if rejected by policy."""
     if parsed.banned:

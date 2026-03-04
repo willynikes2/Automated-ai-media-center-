@@ -29,7 +29,7 @@ export function useEmailLogin() {
       loginWithEmail(email, password),
     onSuccess: (data) => {
       login(toAuthUser(data));
-      navigate('/');
+      navigate(data.setupComplete ? '/' : '/setup');
     },
   });
 }
@@ -45,7 +45,7 @@ export function useJellyfinLogin() {
       loginWithJellyfin(username, password),
     onSuccess: (data) => {
       login(toAuthUser(data), data.jellyfinToken, data.jellyfinUserId);
-      navigate('/');
+      navigate(data.setupComplete ? '/' : '/setup');
     },
   });
 }

@@ -2,15 +2,36 @@ import { Check, Circle, X } from 'lucide-react';
 import { getStateLabel } from '@/components/ui/Badge';
 import type { JobState, JobEvent } from '@/api/jobs';
 
-const PIPELINE: JobState[] = ['CREATED', 'RESOLVING', 'SEARCHING', 'SELECTED', 'ACQUIRING', 'IMPORTING', 'VERIFYING', 'DONE'];
+const PIPELINE: JobState[] = ['CREATED', 'RESOLVING', 'ADDING', 'ACQUIRING', 'IMPORTING', 'VERIFYING', 'DONE'];
 
 function stateIndex(state: string): number {
   return PIPELINE.indexOf(state as JobState);
 }
 
-export function JobTimeline({ currentState, events }: { currentState: string; events?: JobEvent[] }) {
+export function ProgressBar({ percent }: { percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  return (
+    <div className="w-full bg-bg-tertiary rounded-full h-1.5 overflow-hidden">
+      <div
+        className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
+        style={{ width: `${clamped}%` }}
+      />
+    </div>
+  );
+}
+
+export function JobTimeline({
+  currentState,
+  events,
+  progress,
+}: {
+  currentState: string;
+  events?: JobEvent[];
+  progress?: number;
+}) {
   const isFailed = currentState === 'FAILED';
   const currentIdx = isFailed ? -1 : stateIndex(currentState);
+  const showProgress = progress != null && progress >= 0 && ['ACQUIRING', 'IMPORTING'].includes(currentState);
 
   return (
     <div className="space-y-6">
@@ -47,6 +68,17 @@ export function JobTimeline({ currentState, events }: { currentState: string; ev
           );
         })}
       </div>
+
+      {/* Progress bar */}
+      {showProgress && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-text-secondary">{getStateLabel(currentState)}</span>
+            <span className="text-text-tertiary">{Math.round(progress)}%</span>
+          </div>
+          <ProgressBar percent={progress} />
+        </div>
+      )}
 
       {/* Event list */}
       {events && events.length > 0 && (

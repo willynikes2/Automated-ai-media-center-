@@ -184,6 +184,66 @@ async def retry_job(
         )
 
 
+@router.post("/jobs/{job_id}/cancel", response_model=JobListResponse)
+async def cancel_job(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> JobListResponse:
+    """Cancel a non-terminal job by marking it FAILED."""
+
+    terminal = {JobState.DONE, JobState.FAILED}
+
+    async with get_session_factory()() as session:
+        stmt = select(Job).where(Job.id == job_id)
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+
+        result = await session.execute(stmt)
+        job: Job | None = result.scalar_one_or_none()
+
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.state in terminal:
+            raise HTTPException(status_code=400, detail="Job is already in a terminal state")
+
+        now = datetime.utcnow()
+        job.state = JobState.FAILED
+        job.updated_at = now
+
+        event = JobEvent(
+            job_id=job.id,
+            state=JobState.FAILED.value,
+            message="Cancelled by user",
+            created_at=now,
+        )
+        session.add(event)
+        await session.commit()
+
+        logger.info("Job %s cancelled by user %s", job_id, user.id)
+
+        return JobListResponse(
+            id=job.id,
+            user_id=job.user_id,
+            title=job.title,
+            query=job.query,
+            tmdb_id=job.tmdb_id,
+            media_type=job.media_type,
+            season=job.season,
+            episode=job.episode,
+            state=job.state,
+            selected_candidate=job.selected_candidate,
+            rd_torrent_id=job.rd_torrent_id,
+            imported_path=job.imported_path,
+            acquisition_mode=job.acquisition_mode,
+            acquisition_method=job.acquisition_method,
+            streaming_urls=job.streaming_urls,
+            retry_count=job.retry_count,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
+
 @router.get("/jobs/{job_id}/progress")
 async def job_progress(
     job_id: uuid.UUID,

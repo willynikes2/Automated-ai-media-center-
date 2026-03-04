@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { useJobs, filterActive, filterCompleted, useRetryJob } from '@/hooks/useJobs';
+import { useJobs, filterActive, filterCompleted, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
 import { JobTimeline } from '@/components/jobs/JobTimeline';
-import { StateBadge } from '@/components/ui/Badge';
+import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { toast } from '@/components/ui/Toast';
-import { Activity, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Job } from '@/api/jobs';
 
@@ -20,7 +20,45 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'failed', label: 'Failed' },
 ];
 
+function AcquisitionBadge({ mode, method }: { mode: string; method?: string | null }) {
+  if (mode === 'stream') {
+    return (
+      <Badge className="bg-purple-500/20 text-purple-400">
+        <Play className="h-3 w-3 mr-1" />
+        Stream
+      </Badge>
+    );
+  }
+  if (method === 'usenet' || method === 'sabnzbd') {
+    return (
+      <Badge className="bg-blue-500/20 text-blue-400">
+        <HardDrive className="h-3 w-3 mr-1" />
+        Usenet
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-emerald-500/20 text-emerald-400">
+      <Cloud className="h-3 w-3 mr-1" />
+      Real-Debrid
+    </Badge>
+  );
+}
+
 function ActiveJobCard({ job }: { job: Job }) {
+  const cancelMutation = useCancelJob();
+  const isDownloading = ['ACQUIRING', 'IMPORTING'].includes(job.state);
+  const { data: progressData } = useJobProgress(job.id, isDownloading);
+  const progress = progressData?.percent ?? -1;
+
+  const handleCancel = (e: React.MouseEvent) => {
+    e.preventDefault();
+    cancelMutation.mutate(job.id, {
+      onSuccess: () => toast('Job cancelled', 'success'),
+      onError: () => toast('Failed to cancel', 'error'),
+    });
+  };
+
   return (
     <Card className="p-4 ring-1 ring-accent/10">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -34,10 +72,13 @@ function ActiveJobCard({ job }: { job: Job }) {
             {job.episode != null && `E${String(job.episode).padStart(2, '0')}`}
           </p>
         </div>
-        <StateBadge state={job.state} />
+        <div className="flex items-center gap-2 shrink-0">
+          <AcquisitionBadge mode={job.acquisition_mode} method={job.acquisition_method} />
+          <StateBadge state={job.state} />
+        </div>
       </div>
 
-      <JobTimeline currentState={job.state} />
+      <JobTimeline currentState={job.state} progress={progress >= 0 ? progress : undefined} />
 
       {job.selected_candidate && (
         <div className="mt-3 pt-3 border-t border-white/5 text-xs text-text-secondary">
@@ -50,12 +91,24 @@ function ActiveJobCard({ job }: { job: Job }) {
         </div>
       )}
 
-      {job.retry_count > 0 && (
-        <div className="mt-2 flex items-center gap-1 text-xs text-yellow-400">
-          <RefreshCw className="h-3 w-3" />
-          Retry #{job.retry_count}
+      <div className="mt-3 flex items-center justify-between">
+        {job.retry_count > 0 && (
+          <div className="flex items-center gap-1 text-xs text-yellow-400">
+            <RefreshCw className="h-3 w-3" />
+            Retry #{job.retry_count}
+          </div>
+        )}
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={handleCancel}
+            disabled={cancelMutation.isPending}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+          >
+            <Ban className="h-3 w-3" />
+            Cancel
+          </button>
         </div>
-      )}
+      </div>
     </Card>
   );
 }
@@ -91,6 +144,7 @@ function CompletedRow({ job }: { job: Job }) {
           {isFailed && job.retry_count > 0 && ` · ${job.retry_count} retries`}
         </p>
       </div>
+      <AcquisitionBadge mode={job.acquisition_mode} method={job.acquisition_method} />
       {job.selected_candidate?.resolution && (
         <span className="text-xs text-text-tertiary shrink-0">{job.selected_candidate.resolution}p</span>
       )}

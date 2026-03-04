@@ -122,6 +122,8 @@ async def dequeue_qc(timeout: int = 0) -> str | None:
 
 _PROGRESS_PREFIX = "invisiblearr:progress:"
 _PROGRESS_TTL = 3600  # 1 hour
+_RDT_READY_PREFIX = "invisiblearr:rdt_ready:"
+_RDT_READY_TTL = 1800  # 30 minutes
 
 
 async def set_download_progress(job_id: str, percent: int, detail: str = "") -> None:
@@ -146,6 +148,26 @@ async def clear_download_progress(job_id: str) -> None:
     """Remove progress tracking for a completed job."""
     r = await get_redis()
     await _safe_redis_op(r.delete(f"{_PROGRESS_PREFIX}{job_id}"))
+
+
+async def set_rdt_ready(job_id: str, payload: str = "1") -> None:
+    """Set a short-lived signal that rdt reported completion for this job."""
+    r = await get_redis()
+    key = f"{_RDT_READY_PREFIX}{job_id}"
+    await _safe_redis_op(r.set(key, payload, ex=_RDT_READY_TTL))
+
+
+async def get_rdt_ready(job_id: str) -> str | None:
+    """Get rdt-completion signal for a job, if present."""
+    r = await get_redis()
+    key = f"{_RDT_READY_PREFIX}{job_id}"
+    return await _safe_redis_op(r.get(key))
+
+
+async def clear_rdt_ready(job_id: str) -> None:
+    """Clear rdt-completion signal for a job."""
+    r = await get_redis()
+    await _safe_redis_op(r.delete(f"{_RDT_READY_PREFIX}{job_id}"))
 
 
 # ---------------------------------------------------------------------------
