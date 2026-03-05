@@ -23,8 +23,9 @@ from shared.config import get_config  # noqa: E402
 from shared.database import init_db, get_engine, get_session_factory  # noqa: E402
 from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E402
 
+from shared.models import JobState  # noqa: E402
 from monitor import monitor_downloads  # noqa: E402
-from worker import process_job  # noqa: E402
+from worker import process_job, get_job  # noqa: E402
 
 MAX_RETRIES = 5
 RETRY_DELAYS = [30, 60, 120, 300, 600]  # seconds between retries
@@ -100,7 +101,17 @@ async def _run() -> None:
         logger.info("Dequeued job %s", job_id)
         try:
             await process_job(job_id)
-            logger.info("Job %s completed successfully", job_id)
+            # Check actual job state — process_job may return without reaching DONE
+            try:
+                job = await get_job(job_id)
+                if job.state in (JobState.DONE, JobState.FAILED):
+                    logger.info("Job %s finished with state %s", job_id, job.state.value)
+                elif job.state == JobState.VERIFYING:
+                    logger.info("Job %s handed off to QC (state=VERIFYING)", job_id)
+                else:
+                    logger.warning("Job %s ended processing in unexpected state %s", job_id, job.state.value)
+            except Exception:
+                logger.info("Job %s processing returned without error", job_id)
         except Exception:
             logger.exception("Unhandled exception while processing job %s", job_id)
             try:

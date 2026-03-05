@@ -344,16 +344,19 @@ async def process_job(job_id: str) -> None:
     # ------------------------------------------------------------------
     # 5. VERIFYING — QC via ffprobe
     # ------------------------------------------------------------------
+    # IMPORTANT: Transition BEFORE enqueue to avoid race condition.
+    # QC service checks state == VERIFYING and skips if still IMPORTING.
+    await transition(
+        job, JobState.VERIFYING,
+        "File imported, running QC validation",
+    )
+
     try:
         await enqueue_qc(str(job.id))
         logger.info("Enqueued QC job for %s", job.id)
     except Exception:
         logger.exception("Failed to enqueue QC job for %s", job.id)
 
-    await transition(
-        job, JobState.VERIFYING,
-        f"File imported, running QC validation",
-    )
     await clear_rdt_ready(str(job.id))
 
 

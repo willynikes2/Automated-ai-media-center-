@@ -6,6 +6,7 @@ export function useJobs(params: { status?: string; limit?: number } = {}) {
     queryKey: ['jobs', params],
     queryFn: () => getJobs(params),
     refetchInterval: 5000,
+    staleTime: 0,
   });
 }
 
@@ -14,6 +15,7 @@ export function useJob(id: string) {
     queryKey: ['job', id],
     queryFn: () => getJob(id),
     refetchInterval: 5000,
+    staleTime: 0,
     enabled: !!id,
   });
 }
