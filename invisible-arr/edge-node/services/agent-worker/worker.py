@@ -267,11 +267,12 @@ async def process_job(job_id: str) -> None:
     await clear_rdt_ready(str(job.id))
     await transition(job, JobState.ACQUIRING, "Waiting for download")
 
+    already_had_file = False
     try:
         if job.media_type == "movie":
-            await _monitor_radarr_download(job)
+            already_had_file = await _monitor_radarr_download(job)
         else:
-            await _monitor_sonarr_download(job)
+            already_had_file = await _monitor_sonarr_download(job)
     except TimeoutError as exc:
         await transition(job, JobState.FAILED, diagnose_failure(exc))
         return
@@ -283,8 +284,16 @@ async def process_job(job_id: str) -> None:
 
     # ------------------------------------------------------------------
     # 4a. STREAM MODE — create .strm pointer in the user library
+    #     Skip if file already exists locally (no Zurg source to point to)
     # ------------------------------------------------------------------
-    if job.acquisition_mode == "stream":
+    if job.acquisition_mode == "stream" and already_had_file:
+        logger.info(
+            "File already available locally for job %s, skipping stream pointer",
+            job.id,
+        )
+        # Fall through to download-mode verification path
+
+    elif job.acquisition_mode == "stream":
         await transition(job, JobState.IMPORTING, "Creating Zurg stream pointer")
         try:
             strm_path, target_url = await _materialize_stream_pointer(
@@ -536,8 +545,11 @@ async def _ensure_sonarr_root_folder(sonarr: SonarrClient, path: str) -> str:
         raise
 
 
-async def _monitor_radarr_download(job: Job) -> None:
-    """Poll Radarr queue until the movie is downloaded and imported."""
+async def _monitor_radarr_download(job: Job) -> bool:
+    """Poll Radarr queue until the movie is downloaded and imported.
+
+    Returns True if the file was already present locally (no new download).
+    """
     movie_id = job.radarr_movie_id
     if not movie_id:
         raise ValueError("No radarr_movie_id set on job")
@@ -557,7 +569,7 @@ async def _monitor_radarr_download(job: Job) -> None:
         while grab_waited < grab_timeout:
             if await _is_rdt_ready(job):
                 logger.info("RDT completion signal received before Radarr queue grab")
-                return
+                return False
 
             queue = await radarr.get_queue()
             queue_item = _find_queue_item(queue, "movieId", movie_id)
@@ -566,14 +578,14 @@ async def _monitor_radarr_download(job: Job) -> None:
                 logger.info("Radarr grabbed release: %s", queue_item.get("title", "unknown"))
                 if job.acquisition_mode == "stream":
                     logger.info("Stream mode: proceeding after Arr grab for job %s", job.id)
-                    return
+                    return False
                 break
 
             # Check if already completed (e.g. instant RD cache hit)
             movie = await radarr.get_movie(movie_id)
             if movie.get("hasFile"):
                 logger.info("Movie already has file — instant completion")
-                return
+                return True
 
             await asyncio.sleep(10)
             grab_waited += 10
@@ -585,7 +597,7 @@ async def _monitor_radarr_download(job: Job) -> None:
                     grab_timeout,
                     job.id,
                 )
-                return
+                return False
             raise TimeoutError(f"Radarr did not grab a release within {grab_timeout}s")
 
         # Phase 2: Monitor download progress
@@ -593,10 +605,14 @@ async def _monitor_radarr_download(job: Job) -> None:
 
         # Phase 3: Wait for import
         await _wait_for_import_radarr(radarr, movie_id)
+    return False
 
 
-async def _monitor_sonarr_download(job: Job) -> None:
-    """Poll Sonarr queue until the episode(s) are downloaded and imported."""
+async def _monitor_sonarr_download(job: Job) -> bool:
+    """Poll Sonarr queue until the episode(s) are downloaded and imported.
+
+    Returns True if the file was already present locally (no new download).
+    """
     series_id = job.sonarr_series_id
     if not series_id:
         raise ValueError("No sonarr_series_id set on job")
@@ -614,7 +630,7 @@ async def _monitor_sonarr_download(job: Job) -> None:
         while grab_waited < grab_timeout:
             if await _is_rdt_ready(job):
                 logger.info("RDT completion signal received before Sonarr queue grab")
-                return
+                return False
 
             queue = await sonarr.get_queue()
             queue_item = _find_queue_item(queue, "seriesId", series_id)
@@ -623,7 +639,7 @@ async def _monitor_sonarr_download(job: Job) -> None:
                 logger.info("Sonarr grabbed release: %s", queue_item.get("title", "unknown"))
                 if job.acquisition_mode == "stream":
                     logger.info("Stream mode: proceeding after Arr grab for job %s", job.id)
-                    return
+                    return False
                 break
 
             # Check if specific episode already has file
@@ -635,7 +651,7 @@ async def _monitor_sonarr_download(job: Job) -> None:
                 )
                 if target and target.get("hasFile"):
                     logger.info("Episode already has file — instant completion")
-                    return
+                    return True
 
             await asyncio.sleep(10)
             grab_waited += 10
@@ -647,7 +663,7 @@ async def _monitor_sonarr_download(job: Job) -> None:
                     grab_timeout,
                     job.id,
                 )
-                return
+                return False
             raise TimeoutError(f"Sonarr did not grab a release within {grab_timeout}s")
 
         # Phase 2: Monitor download progress
@@ -655,6 +671,7 @@ async def _monitor_sonarr_download(job: Job) -> None:
 
         # Phase 3: Wait for import
         await _wait_for_import_sonarr(sonarr, job)
+    return False
 
 
 def _find_queue_item(queue_response: dict, id_field: str, id_value: int) -> dict | None:

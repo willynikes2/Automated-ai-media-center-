@@ -3,8 +3,7 @@
 > Persistent task list across sessions. Claude reads this at session start.
 
 ## In Progress
-- [ ] Add Zurg + rclone services to docker-compose (stream mode infrastructure)
-- [ ] Fix frontend activity page not updating job status (Shelter showed "downloading" after completion)
+
 
 ## Up Next
 - [ ] Test stream mode end-to-end (Sinners-like request via stream)
@@ -12,6 +11,11 @@
 - [ ] Design user-editable quality profiles with Trash Guides defaults
 
 ## Completed
+- [x] Add Zurg + rclone services to docker-compose + config files (2026-03-05)
+- [x] Fix QC race condition: transition to VERIFYING before enqueuing QC (2026-03-05)
+- [x] Fix worker logging: check actual job state, not just non-exception return (2026-03-05)
+- [x] Fix frontend activity page: staleTime=0 for job queries (2026-03-05)
+- [x] Commit c38de42 — all Zurg infra + bug fixes (2026-03-05)
 - [x] Set up checkpoint/memory system (2026-03-04)
 - [x] Audit search and download pipeline — found 6 bugs, all fixed (2026-03-04)
 - [x] Audit frontend links, routes, and build — found 5 bugs, fixed key ones (2026-03-04)
