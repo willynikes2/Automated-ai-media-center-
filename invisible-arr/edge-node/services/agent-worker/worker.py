@@ -898,6 +898,16 @@ def _pick_zurg_source(
         raise FileNotFoundError(
             f"No matching stream source found in Zurg mount for {canonical_title}"
         )
+
+    # Verify the file is actually readable (not a stale rclone VFS ghost).
+    # A ghost path exists in the cache but fails to stat/read because the
+    # backing Real-Debrid torrent no longer exists.
+    try:
+        best.stat()
+    except OSError:
+        raise FileNotFoundError(
+            f"Zurg source matched but file is not accessible (stale cache): {best}"
+        )
     return best
 
 
