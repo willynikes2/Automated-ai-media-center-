@@ -542,6 +542,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - MEDIA_PATH=/data/media
       - DOWNLOADS_PATH=/data/downloads
+      - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
     networks:
       - internal
 

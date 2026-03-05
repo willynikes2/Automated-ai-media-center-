@@ -64,15 +64,15 @@ def _request_shutdown(signame: str) -> None:
 # ---------------------------------------------------------------------------
 # Jellyfin library refresh
 # ---------------------------------------------------------------------------
-async def _trigger_jellyfin_refresh(jellyfin_url: str) -> None:
-    """POST to Jellyfin's internal library-refresh endpoint.
-
-    No authentication is required for the internal Docker network call.
-    """
+async def _trigger_jellyfin_refresh(jellyfin_url: str, token: str = "") -> None:
+    """POST to Jellyfin's library-refresh endpoint with auth token."""
     url = f"{jellyfin_url.rstrip('/')}/Library/Refresh"
+    headers: dict[str, str] = {}
+    if token:
+        headers["X-Emby-Token"] = token
     try:
         async with httpx.AsyncClient(timeout=JELLYFIN_REFRESH_TIMEOUT_SECONDS) as client:
-            resp = await client.post(url)
+            resp = await client.post(url, headers=headers)
             resp.raise_for_status()
         logger.info("Jellyfin library refresh triggered successfully")
     except httpx.HTTPStatusError as exc:
@@ -200,7 +200,7 @@ async def _process_job(job_id_str: str, rds: aioredis.Redis) -> None:
 
     # ---- Post-commit actions (outside the DB transaction) ----
     if passed:
-        await _trigger_jellyfin_refresh(config.jellyfin_url)
+        await _trigger_jellyfin_refresh(config.jellyfin_url, config.jellyfin_admin_token or "")
     elif job.retry_count <= MAX_RETRIES and job.state == JobState.SEARCHING:
         # Re-enqueue for the worker to pick the next candidate
         await rds.lpush(WORKER_QUEUE, job_id_str)
