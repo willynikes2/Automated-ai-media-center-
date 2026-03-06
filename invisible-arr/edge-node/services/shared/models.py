@@ -29,18 +29,24 @@ def _new_uuid() -> uuid.UUID:
 
 
 class JobState(str, enum.Enum):
+    # ── Active pipeline states ──
     CREATED = "CREATED"
+    SEARCHING = "SEARCHING"          # Added to Arr, search triggered
+    DOWNLOADING = "DOWNLOADING"      # Arr grabbed release, download in progress
+    IMPORTING = "IMPORTING"          # Download complete, Arr organizing file
+    VERIFYING = "VERIFYING"          # QC running
+    DONE = "DONE"
+    # ── Waiting / problem states ──
+    MONITORED = "MONITORED"          # Waiting for release
+    INVESTIGATING = "INVESTIGATING"  # Diagnostic engine working on a problem
+    UNAVAILABLE = "UNAVAILABLE"      # Exhausted all options
+    FAILED = "FAILED"                # Internal — frontend maps to INVESTIGATING or UNAVAILABLE
+    DELETED = "DELETED"
+    # ── Legacy (DB compat with existing rows) ──
     RESOLVING = "RESOLVING"
-    ADDING = "ADDING"        # Added to Sonarr/Radarr, waiting for grab
-    SEARCHING = "SEARCHING"
+    ADDING = "ADDING"
     SELECTED = "SELECTED"
     ACQUIRING = "ACQUIRING"
-    IMPORTING = "IMPORTING"
-    VERIFYING = "VERIFYING"
-    MONITORED = "MONITORED"     # Waiting for release (Radarr/Sonarr monitoring)
-    DONE = "DONE"
-    FAILED = "FAILED"
-    DELETED = "DELETED"
 
 
 class UserRole(str, enum.Enum):
@@ -170,6 +176,18 @@ class JobEvent(Base):
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
 
     job: Mapped["Job"] = relationship(back_populates="events")
+
+
+class JobDiagnostic(Base):
+    __tablename__ = "job_diagnostics"
+
+    id: Mapped[uuid.UUID] = mapped_column(default=_new_uuid, primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    details_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    auto_fix_action: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    resolved: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
 
 
 class Blacklist(Base):
