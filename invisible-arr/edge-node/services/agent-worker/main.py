@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import signal
 import sys
@@ -26,10 +25,8 @@ from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E40
 
 from shared.models import JobState  # noqa: E402
 from monitor import monitor_downloads  # noqa: E402
-from worker import process_job, get_job  # noqa: E402
+from worker import process_job  # noqa: E402
 
-MAX_RETRIES = 5
-RETRY_DELAYS = [30, 60, 120, 300, 600]  # seconds between retries
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 
 from shared.logging import setup_logging  # noqa: E402
@@ -107,18 +104,6 @@ async def _run() -> None:
         async with semaphore:
             try:
                 await process_job(job_id)
-                try:
-                    job = await get_job(job_id)
-                    if job.state in (JobState.DONE, JobState.FAILED):
-                        logger.info("Job %s finished with state %s", job_id, job.state.value)
-                    elif job.state == JobState.VERIFYING:
-                        logger.info("Job %s handed off to QC (state=VERIFYING)", job_id)
-                    elif job.state == JobState.MONITORED:
-                        logger.info("Job %s is now MONITORED (waiting for release)", job_id)
-                    else:
-                        logger.warning("Job %s ended in unexpected state %s", job_id, job.state.value)
-                except Exception:
-                    logger.info("Job %s processing returned without error", job_id)
             except Exception:
                 logger.exception("Unhandled exception while processing job %s", job_id)
                 try:
@@ -126,11 +111,10 @@ async def _run() -> None:
                 except Exception:
                     logger.exception("Could not transition job %s to FAILED", job_id)
 
-            # Check retry regardless of outcome
             try:
-                await _maybe_retry(job_id)
+                await _handle_job_outcome(job_id)
             except Exception:
-                logger.exception("Error checking retry for job %s", job_id)
+                logger.exception("Error in _handle_job_outcome for job %s", job_id)
 
     while not _shutdown_event.is_set():
         try:
@@ -188,10 +172,15 @@ async def _recover_stale_jobs() -> None:
     from sqlalchemy import update as sa_update
 
     TRANSIENT_STATES = (
+        # Current pipeline states
+        JobState.SEARCHING.value,
+        JobState.DOWNLOADING.value,
+        JobState.IMPORTING.value,
+        JobState.INVESTIGATING.value,
+        # Legacy states
         JobState.RESOLVING.value,
         JobState.ADDING.value,
         JobState.ACQUIRING.value,
-        JobState.IMPORTING.value,
         JobState.VERIFYING.value,
     )
 
@@ -236,103 +225,39 @@ async def _recover_stale_jobs() -> None:
             logger.exception("Failed to recover stale job %s", job.id)
 
 
-async def _maybe_retry(job_id: str) -> None:
-    """If a job is FAILED and under the retry limit, handle Arr cleanup and re-enqueue."""
-    from shared.models import Job, JobState, JobEvent  # noqa: E402
+async def _handle_job_outcome(job_id: str) -> None:
+    """Log job outcome after process_job completes. No external retry logic needed —
+    the observer loop handles diagnostics and fixes internally."""
+    from shared.models import Job, JobState  # noqa: E402
     from sqlalchemy import select
-    from sqlalchemy import update as sa_update
     import uuid
-    from datetime import datetime
 
-    factory = get_session_factory()
-    async with factory() as session:
-        result = await session.execute(
-            select(Job).where(Job.id == uuid.UUID(job_id))
-        )
-        job = result.scalar_one_or_none()
-        if job is None or job.state not in (JobState.FAILED,):
-            return  # Only retry FAILED jobs (skip MONITORED, DONE, etc.)
-        if job.retry_count >= MAX_RETRIES:
-            logger.info("Job %s exceeded max retries (%d), staying FAILED", job_id, MAX_RETRIES)
-            return
-
-        new_count = job.retry_count + 1
-        delay = RETRY_DELAYS[min(new_count - 1, len(RETRY_DELAYS) - 1)]
-
-        # --- Smart retry analysis ---
-        strategy_note = ""
-        should_blacklist = True
-        should_re_search = True
-        try:
-            from smart_retry import analyze_failure
-
-            strategy = await analyze_failure(job_id)
-            if strategy is not None:
-                should_blacklist = strategy.blacklist_queue_item
-                should_re_search = strategy.trigger_re_search
-                strategy_note = f" [smart: {strategy.reasoning[:80]}]"
-        except Exception:
-            logger.exception("Smart retry analysis failed for job %s, using dumb retry", job_id)
-
-        # --- Arr cleanup: blacklist failed queue item and optionally re-search ---
-        try:
-            if job.arr_queue_id:
-                if job.radarr_movie_id:
-                    from shared.radarr_client import RadarrClient
-                    async with RadarrClient() as radarr:
-                        await radarr.delete_queue_item(
-                            job.arr_queue_id,
-                            blacklist=should_blacklist,
-                        )
-                        if should_re_search and job.radarr_movie_id:
-                            await radarr.search_movie(job.radarr_movie_id)
-                elif job.sonarr_series_id:
-                    from shared.sonarr_client import SonarrClient
-                    async with SonarrClient() as sonarr:
-                        await sonarr.delete_queue_item(
-                            job.arr_queue_id,
-                            blacklist=should_blacklist,
-                        )
-                        if should_re_search:
-                            if job.season is not None:
-                                await sonarr.search_season(job.sonarr_series_id, job.season)
-                            else:
-                                await sonarr.search_series(job.sonarr_series_id)
-        except Exception:
-            logger.exception("Failed to cleanup Arr queue for job %s", job_id)
-
-        # Reset to CREATED and bump retry count (clear arr_queue_id for fresh monitoring)
-        now = datetime.utcnow()
-        await session.execute(
-            sa_update(Job).where(Job.id == job.id).values(
-                state=JobState.CREATED.value,
-                retry_count=new_count,
-                arr_queue_id=None,
-                updated_at=now,
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(Job).where(Job.id == uuid.UUID(job_id))
             )
-        )
-        event = JobEvent(
-            job_id=job.id,
-            state=JobState.CREATED.value,
-            message=f"Auto-retry #{new_count}/{MAX_RETRIES} (waiting {delay}s){strategy_note}",
-            created_at=now,
-        )
-        session.add(event)
-        await session.commit()
+            job = result.scalar_one_or_none()
+            if not job:
+                return
 
-    logger.info("Job %s: scheduling retry #%d in %ds%s", job_id, new_count, delay, strategy_note)
-
-    # Schedule the delayed re-enqueue in the background so we don't block
-    # the consumer loop from processing other jobs.
-    async def _delayed_enqueue() -> None:
-        await asyncio.sleep(delay)
-        if _shutdown_event.is_set():
-            logger.info("Shutdown requested, skipping retry for job %s", job_id)
-            return
-        await enqueue_job(job_id)
-        logger.info("Job %s re-enqueued for retry #%d", job_id, new_count)
-
-    asyncio.create_task(_delayed_enqueue())
+            if job.state == JobState.DONE.value:
+                logger.info("Job %s (%s) completed successfully", job.id, job.title)
+            elif job.state == JobState.MONITORED.value:
+                logger.info("Job %s (%s) parked as MONITORED — will re-check periodically", job.id, job.title)
+            elif job.state == JobState.UNAVAILABLE.value:
+                logger.info("Job %s (%s) marked UNAVAILABLE after exhausting fixes", job.id, job.title)
+            elif job.state == JobState.VERIFYING.value:
+                logger.info("Job %s (%s) handed off to QC", job.id, job.title)
+            elif job.state == JobState.INVESTIGATING.value:
+                logger.warning("Job %s (%s) still INVESTIGATING after process_job exit", job.id, job.title)
+            elif job.state == JobState.FAILED.value:
+                logger.warning("Job %s (%s) ended in FAILED state", job.id, job.title)
+            else:
+                logger.info("Job %s (%s) ended in state %s", job.id, job.title, job.state)
+    except Exception:
+        logger.exception("Error in _handle_job_outcome for %s", job_id)
 
 
 async def _fail_job(job_id: str) -> None:
@@ -399,12 +324,14 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
             factory = get_session_factory()
             async with factory() as session:
                 result = await session.execute(
-                    select(Job).where(Job.state == JobState.MONITORED.value)
+                    select(Job).where(
+                        Job.state.in_([JobState.MONITORED.value, JobState.UNAVAILABLE.value])
+                    )
                 )
                 monitored_jobs = list(result.scalars().all())
 
             if monitored_jobs:
-                logger.info("Checking %d MONITORED jobs for availability", len(monitored_jobs))
+                logger.info("Checking %d MONITORED/UNAVAILABLE jobs for availability", len(monitored_jobs))
 
             for job in monitored_jobs:
                 if shutdown_event.is_set():
@@ -445,7 +372,7 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
                             available = True
 
                     if available:
-                        logger.info("MONITORED job %s (%s) — content now available, re-enqueuing", job.id, job.title)
+                        logger.info("%s job %s (%s) — content now available, re-enqueuing", job.state, job.id, job.title)
                         now = datetime.utcnow()
                         async with factory() as session:
                             await session.execute(
@@ -464,7 +391,7 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
                             await session.commit()
                         await enqueue_job(str(job.id))
                 except Exception:
-                    logger.exception("Error checking MONITORED job %s", job.id)
+                    logger.exception("Error checking %s job %s", job.state, job.id)
 
         except Exception:
             logger.exception("MONITORED checker cycle failed")
