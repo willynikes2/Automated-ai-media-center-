@@ -1,4 +1,4 @@
-import { Download, Check, Search, HardDrive, Zap, Server, Star, Play } from 'lucide-react';
+import { Download, Check, Search, HardDrive, Zap, Server, Star } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { useCreateRequest } from '@/hooks/useJobs';
@@ -109,7 +109,7 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [selectedDownloader, setSelectedDownloader] = useState<string | null>(null);
-  const [acquisitionMode, setAcquisitionMode] = useState<'download' | 'stream'>('download');
+  const acquisitionMode = 'download' as const;
 
   const searchQuery = useQuery({
     queryKey: ['search-releases', title, mediaType],
@@ -127,7 +127,6 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
     setShowModal(true);
     setSelectedIdx(null);
     setSelectedDownloader(null);
-    setAcquisitionMode('download');
   };
 
   const handleRequest = () => {
@@ -145,7 +144,7 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
         onSuccess: () => {
           setRequested(true);
           setShowModal(false);
-          toast(`${acquisitionMode === 'stream' ? 'Stream' : 'Download'} requested for "${title}"`, 'success');
+          toast(`Download requested for "${title}"`, 'success');
         },
         onError: (err: any) => {
           toast(err?.response?.data?.detail ?? 'Request failed', 'error');
@@ -234,9 +233,7 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
                     selected={selectedIdx === i}
                     onClick={() => {
                       setSelectedIdx(i);
-                      if (acquisitionMode === 'stream') {
-                        setSelectedDownloader('rd');
-                      } else if (!selectedDownloader && r.downloaders.length > 0) {
+                      if (!selectedDownloader && r.downloaders.length > 0) {
                         setSelectedDownloader(r.downloaders[0]);
                       }
                     }}
@@ -253,8 +250,8 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
             </div>
           )}
 
-          {/* Downloader selection (only for download mode) */}
-          {acquisitionMode === 'download' && selectedIdx != null && results[selectedIdx]?.downloaders.length > 1 && (
+          {/* Downloader selection */}
+          {selectedIdx != null && results[selectedIdx]?.downloaders.length > 1 && (
             <div>
               <p className="text-xs font-medium text-text-secondary mb-2">Download with</p>
               <div className="flex gap-2">
@@ -285,10 +282,10 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
               Cancel
             </Button>
             <Button onClick={handleRequest} loading={mutation.isPending}>
-              {acquisitionMode === 'stream' ? <Play className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+              <Download className="h-4 w-4" />
               {selectedIdx != null
-                ? `${acquisitionMode === 'stream' ? 'Stream' : 'Request'} ${results[selectedIdx].resolution}p · ${results[selectedIdx].size_gb.toFixed(1)} GB`
-                : `${acquisitionMode === 'stream' ? 'Stream' : 'Request'} (Auto Select)`}
+                ? `Request ${results[selectedIdx].resolution}p · ${results[selectedIdx].size_gb.toFixed(1)} GB`
+                : 'Request (Auto Select)'}
             </Button>
           </div>
         </div>

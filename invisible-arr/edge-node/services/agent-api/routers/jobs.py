@@ -12,9 +12,10 @@ from sqlalchemy.orm import selectinload
 
 from dependencies import get_current_user
 from shared.database import get_session_factory
-from shared.models import Job, JobEvent, JobState, User
+from shared.models import Job, JobDiagnostic, JobEvent, JobState, User
 from shared.redis_client import enqueue_job, get_download_progress
 from shared.schemas import JobEventResponse, JobListResponse, JobResponse
+from sqlalchemy import text
 
 logger = logging.getLogger("agent-api.jobs")
 router = APIRouter()
@@ -102,11 +103,16 @@ async def list_jobs(
         jobs: list[Job] = list(result.scalars().all())
 
     def _last_error(j: Job) -> str | None:
-        if j.state != JobState.FAILED or not j.events:
+        error_states = {JobState.FAILED.value, JobState.INVESTIGATING.value, JobState.UNAVAILABLE.value}
+        if j.state not in {JobState.FAILED, JobState.INVESTIGATING, JobState.UNAVAILABLE} and j.state not in error_states:
+            if not j.events:
+                return None
+        if not j.events:
             return None
-        failed_events = [e for e in j.events if e.state == JobState.FAILED.value]
-        if failed_events:
-            return max(failed_events, key=lambda e: e.created_at).message
+        # Find the most recent event from an error/investigating state
+        relevant = [e for e in j.events if e.state in error_states]
+        if relevant:
+            return max(relevant, key=lambda e: e.created_at).message
         return None
 
     return [
@@ -153,8 +159,9 @@ async def retry_job(
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        if job.state != JobState.FAILED:
-            raise HTTPException(status_code=400, detail="Only FAILED jobs can be retried")
+        retryable = {JobState.FAILED, JobState.INVESTIGATING, JobState.UNAVAILABLE}
+        if job.state not in retryable:
+            raise HTTPException(status_code=400, detail="Only failed/investigating/unavailable jobs can be retried")
 
         now = datetime.utcnow()
         job.state = JobState.CREATED
@@ -276,3 +283,102 @@ async def job_progress(
     if progress is None:
         return {"percent": -1, "detail": "No active download"}
     return progress
+
+
+@router.get("/jobs/{job_id}/events")
+async def get_job_events(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Get event timeline for a job — shows what happened at each step."""
+
+    async with get_session_factory()() as session:
+        # Verify access
+        stmt = select(Job.id, Job.user_id).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if user.role != "admin" and row[1] != user.id:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        result = await session.execute(
+            select(JobEvent)
+            .where(JobEvent.job_id == job_id)
+            .order_by(JobEvent.created_at.asc())
+        )
+        events = result.scalars().all()
+
+    return [
+        {
+            "id": str(e.id),
+            "state": e.state,
+            "message": e.message,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in events
+    ]
+
+
+@router.get("/jobs/{job_id}/diagnostics")
+async def get_job_diagnostics(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Get diagnostic records for a job — shows what was investigated and what fixes were tried."""
+
+    async with get_session_factory()() as session:
+        # Verify access (admin only for full diagnostics)
+        stmt = select(Job.id, Job.user_id).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if user.role != "admin" and row[1] != user.id:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        result = await session.execute(
+            select(JobDiagnostic)
+            .where(JobDiagnostic.job_id == job_id)
+            .order_by(JobDiagnostic.created_at.desc())
+        )
+        diags = result.scalars().all()
+
+    return [
+        {
+            "id": str(d.id),
+            "category": d.category,
+            "details": d.details_json if user.role == "admin" else None,
+            "auto_fix_action": d.auto_fix_action,
+            "resolved": d.resolved,
+            "created_at": d.created_at.isoformat(),
+        }
+        for d in diags
+    ]
+
+
+@router.get("/admin/diagnostics/summary")
+async def get_diagnostics_summary(
+    user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Aggregate diagnostic stats — shows failure patterns across all jobs."""
+
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text("""
+                SELECT category, COUNT(*) as total,
+                       SUM(CASE WHEN resolved THEN 1 ELSE 0 END) as resolved_count
+                FROM job_diagnostics
+                GROUP BY category
+                ORDER BY total DESC
+            """)
+        )
+        rows = result.fetchall()
+
+    return [
+        {"category": r[0], "total": r[1], "resolved": r[2]}
+        for r in rows
+    ]

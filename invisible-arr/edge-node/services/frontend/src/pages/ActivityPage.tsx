@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useJobs, filterActive, filterCompleted, filterMonitored, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
+import { useJobs, filterActive, filterCompleted, filterMonitored, filterIssues, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
 import { JobTimeline } from '@/components/jobs/JobTimeline';
 import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
@@ -7,29 +7,21 @@ import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { toast } from '@/components/ui/Toast';
-import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Play, Clock } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Job } from '@/api/jobs';
 
-type Filter = 'all' | 'active' | 'monitored' | 'done' | 'failed';
+type Filter = 'all' | 'active' | 'monitored' | 'done' | 'issues';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
   { key: 'monitored', label: 'Waiting' },
   { key: 'done', label: 'Complete' },
-  { key: 'failed', label: 'Failed' },
+  { key: 'issues', label: 'Issues' },
 ];
 
 function AcquisitionBadge({ mode, method }: { mode: string; method?: string | null }) {
-  if (mode === 'stream') {
-    return (
-      <Badge className="bg-purple-500/20 text-purple-400">
-        <Play className="h-3 w-3 mr-1" />
-        Stream
-      </Badge>
-    );
-  }
   if (method === 'usenet' || method === 'sabnzbd') {
     return (
       <Badge className="bg-blue-500/20 text-blue-400">
@@ -48,7 +40,7 @@ function AcquisitionBadge({ mode, method }: { mode: string; method?: string | nu
 
 function ActiveJobCard({ job }: { job: Job }) {
   const cancelMutation = useCancelJob();
-  const isDownloading = ['ACQUIRING', 'IMPORTING'].includes(job.state);
+  const isDownloading = ['DOWNLOADING', 'IMPORTING', 'ACQUIRING'].includes(job.state);
   const { data: progressData } = useJobProgress(job.id, isDownloading);
   const progress = progressData?.percent ?? -1;
 
@@ -116,19 +108,18 @@ function ActiveJobCard({ job }: { job: Job }) {
 
 function friendlyError(raw: string | null): string | null {
   if (!raw) return null;
+  // New diagnostic messages are already mom-friendly, just pass through
+  // Keep fallbacks for old-format messages still in DB
+  if (raw.includes('did not grab a release')) return 'No downloads found yet';
+  if (raw.includes('import not confirmed')) return 'Downloaded but still organizing';
   if (raw.includes('announced but not released')) return 'Waiting for release';
   if (raw.includes('in cinemas only')) return 'Waiting for digital release';
   if (raw.includes('not aired yet')) return 'Waiting to air';
-  if (raw.includes('Content now available')) return 'Now available';
-  if (raw.includes('did not grab a release')) return 'No downloads available';
-  if (raw.includes('Import verification')) return 'Import failed';
-  if (raw.includes('Download stalled')) return 'Download stalled';
-  if (raw.includes('Download failed')) return 'Download failed';
-  return raw.length > 40 ? raw.slice(0, 40) + '...' : raw;
+  return raw.length > 60 ? raw.slice(0, 60) + '...' : raw;
 }
 
 function CompletedRow({ job }: { job: Job }) {
-  const isFailed = job.state === 'FAILED';
+  const isIssue = ['FAILED', 'INVESTIGATING', 'UNAVAILABLE'].includes(job.state);
   const retryMutation = useRetryJob();
 
   const handleRetry = (e: React.MouseEvent) => {
@@ -144,7 +135,7 @@ function CompletedRow({ job }: { job: Job }) {
       to={`/requests/${job.id}`}
       className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-bg-secondary/50 transition-colors"
     >
-      {isFailed ? (
+      {isIssue ? (
         <XCircle className="h-4 w-4 text-status-failed shrink-0" />
       ) : (
         <CheckCircle className="h-4 w-4 text-status-available shrink-0" />
@@ -155,17 +146,17 @@ function CompletedRow({ job }: { job: Job }) {
           {job.media_type === 'tv' ? 'TV' : 'Movie'}
           {' · '}
           {new Date(job.updated_at).toLocaleDateString()}
-          {isFailed && job.last_error && (
+          {isIssue && job.last_error && (
             <span className="text-status-failed"> · {friendlyError(job.last_error)}</span>
           )}
-          {isFailed && !job.last_error && job.retry_count > 0 && ` · ${job.retry_count} retries`}
+          {isIssue && !job.last_error && job.retry_count > 0 && ` · ${job.retry_count} retries`}
         </p>
       </div>
       <AcquisitionBadge mode={job.acquisition_mode} method={job.acquisition_method} />
       {job.selected_candidate?.resolution && (
         <span className="text-xs text-text-tertiary shrink-0">{job.selected_candidate.resolution}p</span>
       )}
-      {isFailed ? (
+      {isIssue ? (
         <button
           onClick={handleRetry}
           className="shrink-0 text-xs px-2 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
@@ -189,7 +180,7 @@ export function ActivityPage() {
   const active = filterActive(jobs);
   const completed = filterCompleted(jobs);
   const monitored = filterMonitored(jobs);
-  const failed = (jobs ?? []).filter((j) => j.state === 'FAILED');
+  const issues = filterIssues(jobs);
   const done = (jobs ?? []).filter((j) => j.state === 'DONE');
 
   const counts: Record<Filter, number> = {
@@ -197,13 +188,13 @@ export function ActivityPage() {
     active: active.length,
     monitored: monitored.length,
     done: done.length,
-    failed: failed.length,
+    issues: issues.length,
   };
 
   const showActive = filter === 'all' || filter === 'active';
   const showMonitored = filter === 'all' || filter === 'monitored';
   const showCompleted = filter === 'all' || filter === 'done';
-  const showFailed = filter === 'failed';
+  const showIssues = filter === 'issues';
 
   return (
     <div className="px-4 md:px-8 py-6 space-y-6">
@@ -284,21 +275,21 @@ export function ActivityPage() {
         </Card>
       )}
 
-      {/* Failed jobs */}
-      {showFailed && (
+      {/* Issues */}
+      {showIssues && (
         <section>
           <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
-            Failed ({failed.length})
+            Issues ({issues.length})
           </h2>
-          {failed.length > 0 ? (
+          {issues.length > 0 ? (
             <Card className="divide-y divide-white/5">
-              {failed.map((job) => (
+              {issues.map((job) => (
                 <CompletedRow key={job.id} job={job} />
               ))}
             </Card>
           ) : (
             <Card className="p-6 text-center">
-              <p className="text-sm text-text-secondary">No failed jobs</p>
+              <p className="text-sm text-text-secondary">No issues</p>
             </Card>
           )}
         </section>

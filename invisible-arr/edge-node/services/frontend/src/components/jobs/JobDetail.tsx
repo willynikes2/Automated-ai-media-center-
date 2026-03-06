@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { JobTimeline } from './JobTimeline';
 import { useRetryJob, useJobProgress } from '@/hooks/useJobs';
 import { toast } from '@/components/ui/Toast';
-import { RefreshCw, Cloud, HardDrive, Play } from 'lucide-react';
+import { RefreshCw, Cloud, HardDrive } from 'lucide-react';
 import type { JobDetail as JobDetailType } from '@/api/jobs';
 
 const FRIENDLY_ERRORS: Record<string, string> = {
@@ -19,21 +19,15 @@ function friendlyError(message: string): string {
 }
 
 function AcquisitionInfo({ mode, method }: { mode: string; method?: string | null }) {
-  const icon = mode === 'stream'
-    ? <Play className="h-3.5 w-3.5" />
-    : method === 'usenet' || method === 'sabnzbd'
+  const icon = method === 'usenet' || method === 'sabnzbd'
     ? <HardDrive className="h-3.5 w-3.5" />
     : <Cloud className="h-3.5 w-3.5" />;
 
-  const label = mode === 'stream'
-    ? 'Streaming (Zurg)'
-    : method === 'usenet' || method === 'sabnzbd'
+  const label = method === 'usenet' || method === 'sabnzbd'
     ? 'Usenet (SABnzbd)'
     : 'Real-Debrid (rdt-client)';
 
-  const color = mode === 'stream'
-    ? 'bg-purple-500/20 text-purple-400'
-    : method === 'usenet' || method === 'sabnzbd'
+  const color = method === 'usenet' || method === 'sabnzbd'
     ? 'bg-blue-500/20 text-blue-400'
     : 'bg-emerald-500/20 text-emerald-400';
 

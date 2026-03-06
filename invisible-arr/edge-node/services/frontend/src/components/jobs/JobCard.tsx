@@ -1,12 +1,9 @@
 import { Link } from 'react-router-dom';
 import { StateBadge, Badge } from '@/components/ui/Badge';
-import { Cloud, HardDrive, Play } from 'lucide-react';
+import { Cloud, HardDrive } from 'lucide-react';
 import type { Job } from '@/api/jobs';
 
 function ModeBadge({ mode, method }: { mode: string; method?: string | null }) {
-  if (mode === 'stream') {
-    return <Badge className="bg-purple-500/20 text-purple-400"><Play className="h-2.5 w-2.5 mr-0.5" />Stream</Badge>;
-  }
   if (method === 'usenet' || method === 'sabnzbd') {
     return <Badge className="bg-blue-500/20 text-blue-400"><HardDrive className="h-2.5 w-2.5 mr-0.5" />Usenet</Badge>;
   }

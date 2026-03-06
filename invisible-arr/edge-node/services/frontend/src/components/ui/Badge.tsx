@@ -2,35 +2,44 @@ import type { JobState } from '@/api/jobs';
 
 const STATE_LABELS: Record<string, string> = {
   CREATED: 'Queued',
-  RESOLVING: 'Looking up info',
-  ADDING: 'Adding to library',
-  SEARCHING: 'Finding releases',
-  SELECTED: 'Release found',
-  ACQUIRING: 'Downloading',
+  SEARCHING: 'Looking for best version',
+  DOWNLOADING: 'Downloading',
   IMPORTING: 'Organizing files',
   VERIFYING: 'Checking quality',
+  DONE: 'Ready to watch!',
   MONITORED: 'Waiting for Release',
-  DONE: 'Complete',
-  FAILED: 'Failed',
+  INVESTIGATING: 'Working on it',
+  UNAVAILABLE: 'Not available',
+  FAILED: 'Working on it',       // Map FAILED to friendly text (diagnostic engine handles it)
   DELETED: 'Removed',
+  // Legacy states
+  RESOLVING: 'Looking for best version',
+  ADDING: 'Looking for best version',
+  SELECTED: 'Found a version',
+  ACQUIRING: 'Downloading',
 };
 
 const stateColors: Record<string, string> = {
   CREATED: 'bg-text-tertiary/20 text-text-secondary',
-  RESOLVING: 'bg-status-downloading/20 text-status-downloading',
-  ADDING: 'bg-blue-500/20 text-blue-400',
-  SEARCHING: 'bg-status-downloading/20 text-status-downloading',
-  SELECTED: 'bg-yellow-500/20 text-yellow-400',
-  ACQUIRING: 'bg-orange-500/20 text-orange-400',
+  SEARCHING: 'bg-blue-500/20 text-blue-400',
+  DOWNLOADING: 'bg-orange-500/20 text-orange-400',
   IMPORTING: 'bg-orange-500/20 text-orange-400',
   VERIFYING: 'bg-orange-500/20 text-orange-400',
-  MONITORED: 'bg-amber-500/20 text-amber-400',
   DONE: 'bg-status-available/20 text-status-available',
-  FAILED: 'bg-status-failed/20 text-status-failed',
+  MONITORED: 'bg-amber-500/20 text-amber-400',
+  INVESTIGATING: 'bg-yellow-500/20 text-yellow-400',
+  UNAVAILABLE: 'bg-red-500/20 text-red-400',
+  FAILED: 'bg-yellow-500/20 text-yellow-400',
   DELETED: 'bg-text-tertiary/20 text-text-tertiary',
+  // Legacy
+  RESOLVING: 'bg-blue-500/20 text-blue-400',
+  ADDING: 'bg-blue-500/20 text-blue-400',
+  SELECTED: 'bg-yellow-500/20 text-yellow-400',
+  ACQUIRING: 'bg-orange-500/20 text-orange-400',
 };
 
-const ACTIVE_STATES = ['RESOLVING', 'ADDING', 'SEARCHING', 'ACQUIRING', 'IMPORTING', 'VERIFYING'];
+const ACTIVE_STATES = ['SEARCHING', 'DOWNLOADING', 'IMPORTING', 'VERIFYING', 'INVESTIGATING',
+                       'RESOLVING', 'ADDING', 'ACQUIRING'];
 
 export function Badge({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (

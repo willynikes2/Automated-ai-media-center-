@@ -227,3 +227,212 @@ async def receive_rdt_complete(
         "job_id": str(resolved_job.id) if resolved_job is not None else None,
         "arr_command": command_response,
     }
+
+
+# ---------------------------------------------------------------------------
+# Radarr / Sonarr-specific webhook endpoints (state-driving)
+# ---------------------------------------------------------------------------
+
+# Terminal states — webhooks should not match jobs in these states.
+_TERMINAL_STATES = {JobState.DONE.value, JobState.DELETED.value, JobState.UNAVAILABLE.value}
+
+
+def _limit_payload(payload: dict[str, Any], max_size: int = 50_000) -> dict[str, Any]:
+    """Truncate a payload dict to *max_size* bytes of JSON for safe DB storage."""
+    raw = json.dumps(payload)
+    if len(raw) <= max_size:
+        return payload
+    return json.loads(raw[:max_size])
+
+
+def _safe_quality_name(quality_obj) -> str:
+    """Safely extract quality name from Arr webhook payload (may be str or nested dict)."""
+    if quality_obj is None:
+        return "?"
+    if isinstance(quality_obj, str):
+        return quality_obj
+    if isinstance(quality_obj, dict):
+        inner = quality_obj.get("quality", quality_obj)
+        if isinstance(inner, dict):
+            return inner.get("name", "?")
+        return str(inner)
+    return str(quality_obj)
+
+
+def _webhook_event_message(event_type: str, payload: dict[str, Any]) -> str:
+    """Build a concise, human-readable message from an Arr webhook."""
+    if event_type == "Grab":
+        release = payload.get("release", {})
+        title = release.get("releaseTitle") or release.get("title") or "unknown"
+        quality = _safe_quality_name(release.get("quality"))
+        indexer = release.get("indexer", "?")
+        return f"Grabbed: {title} [{quality}] from {indexer}"
+
+    if event_type in ("Download", "DownloadFolderImported"):
+        movie_file = payload.get("movieFile") or {}
+        episode_file = payload.get("episodeFile") or {}
+        path = movie_file.get("relativePath") or episode_file.get("relativePath") or "unknown"
+        return f"Imported: {path}"
+
+    if event_type == "DownloadFailed":
+        reason = payload.get("message") or "unknown reason"
+        return f"Download failed: {reason}"
+
+    if event_type == "Health":
+        return f"Health check: {payload.get('message', 'no details')}"
+
+    return f"Webhook event: {event_type}"
+
+
+async def _match_webhook_to_job(
+    payload: dict[str, Any],
+    source: str,
+    session: Any,
+) -> Job | None:
+    """Find the most recent active job matching the webhook's Arr entity ID."""
+    if source == "radarr":
+        arr_id = payload.get("movie", {}).get("id")
+        if arr_id is None:
+            return None
+        stmt = (
+            select(Job)
+            .where(Job.radarr_movie_id == int(arr_id))
+            .where(Job.state.notin_(_TERMINAL_STATES))
+            .order_by(Job.created_at.desc())
+            .limit(1)
+        )
+    elif source == "sonarr":
+        arr_id = payload.get("series", {}).get("id")
+        if arr_id is None:
+            return None
+        stmt = (
+            select(Job)
+            .where(Job.sonarr_series_id == int(arr_id))
+            .where(Job.state.notin_(_TERMINAL_STATES))
+            .order_by(Job.created_at.desc())
+            .limit(1)
+        )
+    else:
+        return None
+
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _process_arr_webhook(
+    payload: dict[str, Any],
+    source: str,
+) -> dict[str, str]:
+    """Shared processor for Radarr/Sonarr webhooks that drives job state."""
+    event_type: str = payload.get("eventType", "unknown")
+    logger.info(
+        "Received %s webhook: eventType=%s keys=%s",
+        source,
+        event_type,
+        list(payload.keys()),
+    )
+
+    async with get_session_factory()() as session:
+        job = await _match_webhook_to_job(payload, source, session)
+
+        if job is None:
+            logger.debug(
+                "No active job matched %s webhook (eventType=%s)",
+                source,
+                event_type,
+            )
+            return {"status": "accepted", "detail": "no matching job"}
+
+        # Log the webhook as a JobEvent regardless of transition.
+        event = JobEvent(
+            job_id=job.id,
+            state=f"webhook:{source}:{event_type}",
+            message=_webhook_event_message(event_type, payload),
+            metadata_json=_limit_payload(payload),
+        )
+        session.add(event)
+
+        # ── State transitions based on eventType ──
+
+        if event_type == "Grab":
+            if job.state in (
+                JobState.SEARCHING.value,
+                JobState.CREATED.value,
+                JobState.RESOLVING.value,
+                JobState.ADDING.value,
+            ):
+                job.state = JobState.DOWNLOADING.value
+                logger.info("Job %s → DOWNLOADING via %s Grab", job.id, source)
+
+            release = payload.get("release", {})
+            if release:
+                event.metadata_json = _limit_payload({
+                    "release_title": release.get("releaseTitle") or release.get("title"),
+                    "indexer": release.get("indexer"),
+                    "quality": _safe_quality_name(release.get("quality")),
+                    "size": release.get("size"),
+                    "full_payload": payload,
+                })
+            # Capture queue ID if the release carries one.
+            queue_id = release.get("downloadId") or release.get("id")
+            if queue_id is not None:
+                job.arr_queue_id = int(queue_id) if str(queue_id).isdigit() else job.arr_queue_id
+
+        elif event_type in ("Download", "DownloadFolderImported"):
+            if job.state in (
+                JobState.DOWNLOADING.value,
+                JobState.ACQUIRING.value,
+                JobState.IMPORTING.value,
+                JobState.SEARCHING.value,
+            ):
+                job.state = JobState.IMPORTING.value
+                logger.info("Job %s → IMPORTING via %s %s", job.id, source, event_type)
+
+            file_info = payload.get("movieFile") or payload.get("episodeFile") or {}
+            rel_path = file_info.get("relativePath") or file_info.get("path")
+            if rel_path:
+                job.imported_path = rel_path
+
+            # Signal RDT-ready so worker observe loop picks it up.
+            await set_rdt_ready(str(job.id), payload="webhook_import")
+
+        elif event_type == "DownloadFailed":
+            if job.state in (
+                JobState.DOWNLOADING.value,
+                JobState.ACQUIRING.value,
+            ):
+                job.state = JobState.INVESTIGATING.value
+                logger.info("Job %s → INVESTIGATING via %s DownloadFailed", job.id, source)
+
+            failure_msg = payload.get("message", "unknown reason")
+            event.message = f"Download failed: {failure_msg}"
+
+        elif event_type == "Health":
+            logger.warning(
+                "%s health event: %s",
+                source,
+                payload.get("message", "no details"),
+            )
+
+        await session.commit()
+        logger.info(
+            "Processed %s webhook for job %s (eventType=%s, state=%s)",
+            source,
+            job.id,
+            event_type,
+            job.state,
+        )
+
+    return {"status": "accepted", "job_id": str(job.id), "new_state": job.state}
+
+
+@router.post("/webhooks/radarr", status_code=200)
+async def receive_radarr_webhook(payload: dict[str, Any]) -> dict[str, str]:
+    """Process Radarr webhook and advance job state."""
+    return await _process_arr_webhook(payload, source="radarr")
+
+
+@router.post("/webhooks/sonarr", status_code=200)
+async def receive_sonarr_webhook(payload: dict[str, Any]) -> dict[str, str]:
+    """Process Sonarr webhook and advance job state."""
+    return await _process_arr_webhook(payload, source="sonarr")
