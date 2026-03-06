@@ -245,12 +245,26 @@ def _limit_payload(payload: dict[str, Any], max_size: int = 50_000) -> dict[str,
     return json.loads(raw[:max_size])
 
 
+def _safe_quality_name(quality_obj) -> str:
+    """Safely extract quality name from Arr webhook payload (may be str or nested dict)."""
+    if quality_obj is None:
+        return "?"
+    if isinstance(quality_obj, str):
+        return quality_obj
+    if isinstance(quality_obj, dict):
+        inner = quality_obj.get("quality", quality_obj)
+        if isinstance(inner, dict):
+            return inner.get("name", "?")
+        return str(inner)
+    return str(quality_obj)
+
+
 def _webhook_event_message(event_type: str, payload: dict[str, Any]) -> str:
     """Build a concise, human-readable message from an Arr webhook."""
     if event_type == "Grab":
         release = payload.get("release", {})
         title = release.get("releaseTitle") or release.get("title") or "unknown"
-        quality = release.get("quality", {}).get("quality", {}).get("name", "?")
+        quality = _safe_quality_name(release.get("quality"))
         indexer = release.get("indexer", "?")
         return f"Grabbed: {title} [{quality}] from {indexer}"
 
@@ -355,7 +369,7 @@ async def _process_arr_webhook(
                 event.metadata_json = _limit_payload({
                     "release_title": release.get("releaseTitle") or release.get("title"),
                     "indexer": release.get("indexer"),
-                    "quality": release.get("quality", {}).get("quality", {}).get("name"),
+                    "quality": _safe_quality_name(release.get("quality")),
                     "size": release.get("size"),
                     "full_payload": payload,
                 })
