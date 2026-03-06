@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { toast } from '@/components/ui/Toast';
-import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Play, Clock } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Job } from '@/api/jobs';
 
@@ -22,14 +22,6 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 function AcquisitionBadge({ mode, method }: { mode: string; method?: string | null }) {
-  if (mode === 'stream') {
-    return (
-      <Badge className="bg-purple-500/20 text-purple-400">
-        <Play className="h-3 w-3 mr-1" />
-        Stream
-      </Badge>
-    );
-  }
   if (method === 'usenet' || method === 'sabnzbd') {
     return (
       <Badge className="bg-blue-500/20 text-blue-400">
