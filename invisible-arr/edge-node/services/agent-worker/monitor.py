@@ -1,309 +1,158 @@
-"""Download state monitor — polls Sonarr/Radarr queues and rdt-client for real-time status.
+"""Download health monitor — fallback safety net for missed webhooks.
 
-Runs as a background task alongside the job consumer in main.py.
-
-Key responsibility: rdt-client tells Sonarr/Radarr that downloads are "complete"
-before files are actually downloaded locally. This monitor polls rdt-client's own
-API for real byte-level progress and reports it to the frontend via Redis.
-
-Also detects stuck/failed downloads and logs warnings for the retry system.
+Runs every 60s. Checks jobs in active states that haven't received a
+webhook update in 10+ minutes. Queries Arr directly to catch missed events.
+This is a SAFETY NET, not the primary state driver (webhooks are primary).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from typing import Any
+from datetime import datetime, timedelta
 
-import httpx
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select
 
-from shared.config import get_config
 from shared.database import get_session_factory
-from shared.models import Job, JobState
+from shared.models import Job, JobEvent, JobState
 from shared.radarr_client import RadarrClient
-from shared.redis_client import set_rdt_ready
 from shared.sonarr_client import SonarrClient
+from shared.redis_client import set_rdt_ready, set_download_progress
 
 logger = logging.getLogger("agent-worker.monitor")
 
-POLL_INTERVAL = 15  # seconds
+HEALTH_CHECK_INTERVAL = 60  # seconds between checks
+STALE_THRESHOLD = 600       # 10 min without update = check on it
 
 
 async def monitor_downloads(shutdown_event: asyncio.Event) -> None:
-    """Background loop that polls Arr queues and rdt-client for download status.
-
-    This runs continuously until the shutdown event is set.
-    """
-    config = get_config()
-    logger.info("Download monitor starting (poll every %ds)", POLL_INTERVAL)
+    """Background health check loop."""
+    logger.info("Download health monitor starting (check every %ds)", HEALTH_CHECK_INTERVAL)
 
     while not shutdown_event.is_set():
         try:
-            await _poll_cycle(config)
+            await _health_check_cycle()
         except Exception:
-            logger.exception("Monitor poll cycle failed")
+            logger.exception("Health check cycle error")
 
-        # Wait for next cycle or shutdown
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL)
-            break  # shutdown_event was set
-        except asyncio.TimeoutError:
-            continue  # Normal timeout, do next poll
-
-    logger.info("Download monitor stopped")
-
-
-async def _poll_cycle(config: Any) -> None:
-    """Single poll cycle: check Radarr + Sonarr queues, rdt-client status."""
-    active_jobs = await _get_active_jobs()
-
-    # Poll Radarr queue
-    try:
-        async with RadarrClient() as radarr:
-            radarr_queue = await radarr.get_queue()
-            radarr_records = radarr_queue.get("records", [])
-            await _sync_job_correlations_from_arr_queue(active_jobs, radarr_records, "radarr")
-            await _mark_ready_from_arr_queue(active_jobs, radarr_records, "radarr")
-            for item in radarr_records:
-                await _process_queue_item(item, "radarr")
-    except Exception:
-        logger.debug("Failed to poll Radarr queue", exc_info=True)
-
-    # Poll Sonarr queue
-    try:
-        async with SonarrClient() as sonarr:
-            sonarr_queue = await sonarr.get_queue()
-            sonarr_records = sonarr_queue.get("records", [])
-            await _sync_job_correlations_from_arr_queue(active_jobs, sonarr_records, "sonarr")
-            await _mark_ready_from_arr_queue(active_jobs, sonarr_records, "sonarr")
-            for item in sonarr_records:
-                await _process_queue_item(item, "sonarr")
-    except Exception:
-        logger.debug("Failed to poll Sonarr queue", exc_info=True)
-
-    # Poll rdt-client for real download progress
-    try:
-        await _poll_rdt_client(config, active_jobs)
-    except Exception:
-        logger.debug("Failed to poll rdt-client", exc_info=True)
-
-
-async def _process_queue_item(item: dict, source: str) -> None:
-    """Process a single Arr queue item — log warnings for stuck/failed."""
-    status = item.get("trackedDownloadStatus", "")
-    state = item.get("trackedDownloadState", "")
-    title = item.get("title", "unknown")
-
-    if state == "failed":
-        msgs = _extract_status_messages(item)
-        logger.warning(
-            "[%s] Download FAILED: %s — %s",
-            source, title, msgs,
-        )
-
-    elif status == "warning":
-        msgs = _extract_status_messages(item)
-        logger.warning(
-            "[%s] Download WARNING: %s — %s",
-            source, title, msgs,
-        )
-
-
-def _extract_status_messages(item: dict) -> str:
-    """Extract human-readable status messages from an Arr queue item."""
-    messages = item.get("statusMessages", [])
-    parts = []
-    for msg in messages:
-        if isinstance(msg, dict):
-            title = msg.get("title", "")
-            details = msg.get("messages", [])
-            if title:
-                parts.append(title)
-            for d in details:
-                if isinstance(d, str):
-                    parts.append(d)
-    return "; ".join(parts) if parts else "no details"
-
-
-async def _poll_rdt_client(config: Any, active_jobs: list[Job]) -> None:
-    """Poll rdt-client API for real download progress.
-
-    rdt-client exposes a REST API at port 6500. We check active downloads
-    for byte-level progress, which is more accurate than what Sonarr/Radarr
-    report (since rdt-client tells Arr "done" prematurely).
-    """
-    rdt_url = config.rdt_client_url.rstrip("/")
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            resp = await client.get(f"{rdt_url}/Api/Torrents")
-            if resp.status_code == 401:
-                # Need to authenticate first
-                auth_resp = await client.post(
-                    f"{rdt_url}/Api/Authentication/Login",
-                    json={
-                        "userName": config.rdt_client_username,
-                        "password": config.rdt_client_password,
-                    },
-                )
-                if auth_resp.status_code == 200:
-                    resp = await client.get(f"{rdt_url}/Api/Torrents")
-                else:
-                    logger.debug("rdt-client auth failed: %d", auth_resp.status_code)
-                    return
-
-            if resp.status_code != 200:
-                return
-
-            torrents = resp.json()
-        except httpx.ConnectError:
-            return  # rdt-client not reachable, skip silently
-
-    if not isinstance(torrents, list):
-        return
-
-    done_ids: set[str] = set()
-    for torrent in torrents:
-        rd_status = torrent.get("rdStatus", "")
-        download_status = torrent.get("status", "")
-        progress = torrent.get("progress", 0)
-        torrent_id = str(torrent.get("torrentId", "")).strip()
-        filename = torrent.get("rdName", "unknown")[:60]
-
-        if torrent_id and _is_torrent_complete(rd_status, download_status, progress):
-            done_ids.add(torrent_id.lower())
-
-        # Log any issues
-        if download_status in ("Error", "Failed"):
-            error = torrent.get("error", "")
-            logger.warning(
-                "rdt-client download error: %s — %s (status=%s)",
-                filename, error, download_status,
-            )
-    if not done_ids:
-        return
-
-    for job in active_jobs:
-        rid = (job.rd_torrent_id or "").strip().lower()
-        if rid and rid in done_ids:
-            await set_rdt_ready(
-                str(job.id),
-                payload=json.dumps(
-                    {"source": "monitor:rdt", "rd_torrent_id": job.rd_torrent_id}
-                ),
-            )
-
-
-def _is_torrent_complete(rd_status: Any, download_status: Any, progress: Any) -> bool:
-    """Return True when rdt-client indicates completion."""
-    rd = str(rd_status or "").strip().lower()
-    st = str(download_status or "").strip().lower()
-    try:
-        prog = float(progress)
-    except (TypeError, ValueError):
-        prog = 0.0
-
-    if prog >= 100:
-        return True
-    if rd in {"downloaded", "finished", "complete", "completed", "cached"}:
-        return True
-    if st in {"downloaded", "finished", "complete", "completed", "ready"}:
-        return True
-    return False
-
-
-async def _get_active_jobs() -> list[Job]:
-    """Load jobs that are currently waiting for download/import completion."""
-    async with get_session_factory()() as session:
-        result = await session.execute(
-            select(Job)
-            .where(Job.state.in_([JobState.ACQUIRING.value, JobState.IMPORTING.value]))
-            .order_by(Job.updated_at.desc())
-            .limit(200)
-        )
-        return list(result.scalars().all())
-
-
-async def _mark_ready_from_arr_queue(
-    active_jobs: list[Job], records: list[dict], source: str
-) -> None:
-    """Set rdt-ready when an active job's tracked Arr queue item has disappeared."""
-    queue_ids = {
-        int(item["id"])
-        for item in records
-        if isinstance(item, dict) and isinstance(item.get("id"), int)
-    }
-    for job in active_jobs:
-        qid = job.arr_queue_id
-        if not qid:
-            continue
-        if qid not in queue_ids:
-            await set_rdt_ready(
-                str(job.id),
-                payload=json.dumps(
-                    {"source": f"monitor:{source}", "arr_queue_id": qid}
-                ),
-            )
-
-
-def _queue_download_id(item: dict) -> str | None:
-    """Extract the most useful download-id/hash from an Arr queue item."""
-    raw = (
-        item.get("downloadId")
-        or item.get("downloadClientId")
-        or item.get("downloadClientInfo", {}).get("downloadId")
-    )
-    if isinstance(raw, str):
-        raw = raw.strip()
-        return raw or None
-    return None
-
-
-async def _sync_job_correlations_from_arr_queue(
-    active_jobs: list[Job], records: list[dict], source: str
-) -> None:
-    """Backfill job correlation fields from currently visible Arr queue records."""
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        queue_id = record.get("id")
-        if not isinstance(queue_id, int):
-            continue
-        download_id = _queue_download_id(record)
-
-        for job in active_jobs:
-            if source == "radarr":
-                media_id = record.get("movieId")
-                if not (job.radarr_movie_id and media_id == job.radarr_movie_id):
-                    continue
-            else:
-                media_id = record.get("seriesId")
-                if not (job.sonarr_series_id and media_id == job.sonarr_series_id):
-                    continue
-
-            updates: dict[str, Any] = {}
-            if not job.arr_queue_id and queue_id:
-                updates["arr_queue_id"] = queue_id
-            if not job.rd_torrent_id and download_id:
-                updates["rd_torrent_id"] = download_id
-
-            if updates:
-                await _update_job_fields(job.id, **updates)
-                if "arr_queue_id" in updates:
-                    job.arr_queue_id = updates["arr_queue_id"]
-                if "rd_torrent_id" in updates:
-                    job.rd_torrent_id = updates["rd_torrent_id"]
+            await asyncio.wait_for(shutdown_event.wait(), timeout=HEALTH_CHECK_INTERVAL)
             break
+        except asyncio.TimeoutError:
+            pass
+
+    logger.info("Download health monitor stopped")
 
 
-async def _update_job_fields(job_id: Any, **kwargs: Any) -> None:
-    """Persist job field updates from monitor context."""
-    if not kwargs:
-        return
+async def _health_check_cycle() -> None:
+    """Check all active jobs for missed webhook events."""
     async with get_session_factory()() as session:
-        await session.execute(
-            sa_update(Job).where(Job.id == job_id).values(**kwargs)
+        stale_cutoff = datetime.utcnow() - timedelta(seconds=STALE_THRESHOLD)
+        result = await session.execute(
+            select(Job).where(
+                Job.state.in_([
+                    JobState.SEARCHING.value,
+                    JobState.DOWNLOADING.value,
+                    JobState.INVESTIGATING.value,
+                    # Legacy states from before migration
+                    JobState.RESOLVING.value,
+                    JobState.ADDING.value,
+                    JobState.ACQUIRING.value,
+                ]),
+                Job.updated_at < stale_cutoff,
+            )
         )
+        stale_jobs = result.scalars().all()
+
+        if not stale_jobs:
+            return
+
+        logger.info("Health check: found %d stale jobs to check", len(stale_jobs))
+
+        for job in stale_jobs:
+            try:
+                await _check_job_health(session, job)
+            except Exception:
+                logger.exception("Health check error for job %s", job.id)
+
         await session.commit()
+
+
+async def _check_job_health(session, job: Job) -> None:
+    """Check a single stale job against Arr state."""
+
+    # Check 1: Does the file already exist? (Webhook might have been missed)
+    has_file = False
+    if job.media_type == "movie" and job.radarr_movie_id:
+        try:
+            async with RadarrClient() as client:
+                movie = await client.get_movie(job.radarr_movie_id)
+                has_file = movie.get("hasFile", False)
+        except Exception:
+            pass
+    elif job.sonarr_series_id:
+        try:
+            async with SonarrClient() as client:
+                if job.episode and job.season:
+                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
+                    target = next((e for e in episodes if e.get("episodeNumber") == job.episode), None)
+                    has_file = target.get("hasFile", False) if target else False
+                elif job.season:
+                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
+                    has_file = any(e.get("hasFile", False) for e in episodes)
+        except Exception:
+            pass
+
+    if has_file:
+        logger.info("Health check: job %s (%s) has file — signaling completion", job.id, job.title)
+        await set_rdt_ready(str(job.id), payload="health_check_found_file")
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+        return
+
+    # Check 2: Is there a queue item with progress?
+    queue_item = None
+    try:
+        if job.media_type == "movie" and job.radarr_movie_id:
+            async with RadarrClient() as client:
+                queue = await client.get_queue(page_size=100, include_movie=True)
+                for item in queue.get("records", []):
+                    if item.get("movieId") == job.radarr_movie_id:
+                        queue_item = item
+                        break
+        elif job.sonarr_series_id:
+            async with SonarrClient() as client:
+                queue = await client.get_queue(page_size=100, include_series=True)
+                for item in queue.get("records", []):
+                    if item.get("seriesId") == job.sonarr_series_id:
+                        queue_item = item
+                        break
+    except Exception:
+        pass
+
+    if queue_item:
+        # Download is in progress — update progress and touch timestamp
+        size = queue_item.get("size", 0)
+        sizeleft = queue_item.get("sizeleft", 0)
+        pct = max(0, min(100, int(((size - sizeleft) / size) * 100))) if size > 0 else 0
+        await set_download_progress(str(job.id), pct, queue_item.get("title", ""))
+
+        # Update state if still in SEARCHING/legacy states
+        if job.state in (JobState.SEARCHING.value, JobState.RESOLVING.value,
+                         JobState.ADDING.value):
+            job.state = JobState.DOWNLOADING.value
+            session.add(JobEvent(
+                job_id=job.id,
+                state=JobState.DOWNLOADING.value,
+                message=f"Download detected by health check ({pct}%)",
+            ))
+
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+        logger.info("Health check: job %s (%s) downloading at %d%%", job.id, job.title, pct)
+    else:
+        # No queue item, no file — just touch timestamp so we don't spam
+        # The worker's _observe_until_done handles diagnostics
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+        logger.debug("Health check: job %s (%s) — no queue item, no file", job.id, job.title)
