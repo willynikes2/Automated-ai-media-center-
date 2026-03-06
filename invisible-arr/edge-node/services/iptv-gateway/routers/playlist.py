@@ -172,15 +172,24 @@ async def get_epg(
 
         # Fetch EPG from source
         assert source.epg_url is not None
-        headers = source.headers_json or {}
-        try:
-            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                resp = await client.get(source.epg_url, headers=headers)
-                resp.raise_for_status()
-                raw_epg = resp.text
-        except httpx.HTTPError as exc:
-            logger.error("Failed to fetch EPG from %s: %s", source.epg_url, exc)
-            continue
+        if source.epg_url.startswith("file://"):
+            import pathlib
+            local_path = pathlib.Path(source.epg_url.removeprefix("file://"))
+            try:
+                raw_epg = local_path.read_text(errors="replace")
+            except FileNotFoundError:
+                logger.error("Local EPG file not found: %s", local_path)
+                continue
+        else:
+            headers = source.headers_json or {}
+            try:
+                async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+                    resp = await client.get(source.epg_url, headers=headers)
+                    resp.raise_for_status()
+                    raw_epg = resp.text
+            except httpx.HTTPError as exc:
+                logger.error("Failed to fetch EPG from %s: %s", source.epg_url, exc)
+                continue
 
         # Localize timezone
         try:

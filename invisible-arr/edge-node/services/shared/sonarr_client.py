@@ -97,6 +97,18 @@ class SonarrClient:
                 return s
         return None
 
+    async def update_series(self, series: dict) -> dict:
+        """Update a series in Sonarr (e.g. to change monitored state)."""
+        resp = await self._client.put(f"/api/v3/series/{series['id']}", json=series)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def update_episode(self, episode: dict) -> dict:
+        """Update an episode in Sonarr (e.g. to change monitored state)."""
+        resp = await self._client.put(f"/api/v3/episode/{episode['id']}", json=episode)
+        resp.raise_for_status()
+        return resp.json()
+
     async def delete_series(self, series_id: int, delete_files: bool = False) -> None:
         """Delete a series from Sonarr."""
         resp = await self._client.delete(
@@ -121,6 +133,11 @@ class SonarrClient:
         resp = await self._client.get(f"/api/v3/episode/{episode_id}")
         resp.raise_for_status()
         return resp.json()
+
+    async def delete_episode_file(self, episode_file_id: int) -> None:
+        """Delete an episode file from Sonarr."""
+        resp = await self._client.delete(f"/api/v3/episodefile/{episode_file_id}")
+        resp.raise_for_status()
 
     # -- Search Commands ------------------------------------------------------
 

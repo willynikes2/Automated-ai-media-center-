@@ -4,6 +4,17 @@ import type { JobState, JobEvent } from '@/api/jobs';
 
 const PIPELINE: JobState[] = ['CREATED', 'RESOLVING', 'ADDING', 'ACQUIRING', 'IMPORTING', 'VERIFYING', 'DONE'];
 
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
+}
+
+function formatSpeed(bytesPerSec: number): string {
+  return `${formatBytes(bytesPerSec)}/s`;
+}
+
 function stateIndex(state: string): number {
   return PIPELINE.indexOf(state as JobState);
 }
@@ -24,13 +35,16 @@ export function JobTimeline({
   currentState,
   events,
   progress,
+  progressData,
 }: {
   currentState: string;
   events?: JobEvent[];
   progress?: number;
+  progressData?: { speed_bytes: number; size_total: number; size_downloaded: number; time_remaining: string };
 }) {
   const isFailed = currentState === 'FAILED';
-  const currentIdx = isFailed ? -1 : stateIndex(currentState);
+  const isMonitored = currentState === 'MONITORED';
+  const currentIdx = (isFailed || isMonitored) ? -1 : stateIndex(currentState);
   const showProgress = progress != null && progress >= 0 && ['ACQUIRING', 'IMPORTING'].includes(currentState);
 
   return (
@@ -77,6 +91,19 @@ export function JobTimeline({
             <span className="text-text-tertiary">{Math.round(progress)}%</span>
           </div>
           <ProgressBar percent={progress} />
+          {progressData && (progressData.speed_bytes > 0 || progressData.size_total > 0) && (
+            <div className="flex items-center gap-3 text-[11px] text-text-tertiary mt-1">
+              {progressData.speed_bytes > 0 && (
+                <span>↓ {formatSpeed(progressData.speed_bytes)}</span>
+              )}
+              {progressData.size_total > 0 && (
+                <span>{formatBytes(progressData.size_downloaded)} / {formatBytes(progressData.size_total)}</span>
+              )}
+              {progressData.time_remaining && (
+                <span>⏱ {progressData.time_remaining}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

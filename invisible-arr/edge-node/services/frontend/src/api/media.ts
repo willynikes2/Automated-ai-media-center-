@@ -133,3 +133,19 @@ export async function getTVSeasonDetail(tmdbId: number, seasonNumber: number): P
   const res = await agentApi.get(`/v1/tmdb/tv/${tmdbId}/season/${seasonNumber}`);
   return res.data;
 }
+
+export interface DeleteMediaRequest {
+  file_path: string;
+  media_type: 'movie' | 'tv';
+  delete_scope: 'file' | 'season' | 'series';
+}
+
+export interface DeleteMediaResponse {
+  freed_bytes: number;
+  deleted_files: number;
+}
+
+export async function deleteLibraryItem(req: DeleteMediaRequest): Promise<DeleteMediaResponse> {
+  const res = await agentApi.delete('/v1/library/item', { data: req });
+  return res.data;
+}

@@ -37,8 +37,10 @@ class JobState(str, enum.Enum):
     ACQUIRING = "ACQUIRING"
     IMPORTING = "IMPORTING"
     VERIFYING = "VERIFYING"
+    MONITORED = "MONITORED"     # Waiting for release (Radarr/Sonarr monitoring)
     DONE = "DONE"
     FAILED = "FAILED"
+    DELETED = "DELETED"
 
 
 class UserRole(str, enum.Enum):
@@ -82,6 +84,9 @@ class User(Base):
     storage_used_gb: Mapped[float] = mapped_column(default=0.0)
     rd_api_token_enc: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     usenet_config_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    google_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    apple_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     jellyfin_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jellyfin_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
     radarr_root_folder_id: Mapped[int | None] = mapped_column(nullable=True)

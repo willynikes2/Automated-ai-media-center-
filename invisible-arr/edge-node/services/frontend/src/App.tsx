@@ -18,6 +18,7 @@ import { QuickConnectPage } from '@/pages/QuickConnectPage';
 import { LibraryItemPage } from '@/pages/LibraryItemPage';
 import { SetupPage } from '@/pages/SetupPage';
 import { ResellerPage } from '@/pages/ResellerPage';
+import { GoogleCallbackPage } from '@/pages/GoogleCallbackPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/quick-connect" element={<QuickConnectPage />} />
+          <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
 
           {/* Protected standalone routes (no AppShell) */}
           <Route path="/setup" element={<ProtectedRoute><SetupPage /></ProtectedRoute>} />

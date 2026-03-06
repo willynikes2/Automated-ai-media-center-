@@ -192,47 +192,14 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={`Request: ${title}`}>
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
-          {/* Download / Stream toggle */}
+          {/* Download mode indicator */}
           <div className="flex gap-1 bg-bg-tertiary rounded-lg p-1">
             <button
-              onClick={() => {
-                setAcquisitionMode('download');
-              }}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                acquisitionMode === 'download'
-                  ? 'bg-accent text-white'
-                  : 'text-text-secondary hover:text-text-primary'
-              }`}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors bg-accent text-white"
             >
               <HardDrive className="h-4 w-4" /> Download
             </button>
-            <button
-              onClick={() => {
-                setAcquisitionMode('stream');
-                if (rdAvailable) setSelectedDownloader('rd');
-              }}
-              disabled={!rdAvailable}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                acquisitionMode === 'stream'
-                  ? 'bg-accent text-white'
-                  : rdAvailable
-                  ? 'text-text-secondary hover:text-text-primary'
-                  : 'text-text-tertiary/50 cursor-not-allowed'
-              }`}
-            >
-              <Play className="h-4 w-4" /> Stream
-            </button>
           </div>
-          {acquisitionMode === 'stream' && (
-            <p className="text-[10px] text-text-tertiary">
-              Stream uses Real-Debrid for instant playback without saving to disk.
-            </p>
-          )}
-          {!rdAvailable && (
-            <p className="text-[10px] text-text-tertiary">
-              Streaming requires Real-Debrid to be enabled.
-            </p>
-          )}
 
           {/* Search status */}
           {searchQuery.isLoading && (

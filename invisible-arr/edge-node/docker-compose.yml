@@ -34,6 +34,14 @@ services:
       - "--api=false"
       - "--api.dashboard=false"
       - "--log.level=WARN"
+      # Security plugins
+      - "--experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban"
+      - "--experimental.plugins.fail2ban.version=v0.8.3"
+      - "--experimental.plugins.real-ip.modulename=github.com/soulbalz/traefik-real-ip"
+      - "--experimental.plugins.real-ip.version=v1.0.3"
+      # Dynamic file provider for middleware configs
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
     ports:
       - "80:80"
       - "443:443"
@@ -54,7 +62,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
       - ${MEDIA_PATH:-./data/media}:/data/media:ro
-      - ${DATA_PATH:-./data}/zurg:/data/zurg:ro
+      - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
       - ${RECORDINGS_PATH:-./data/recordings}:/data/recordings
     ports:
       - "127.0.0.1:${JELLYFIN_PORT:-8096}:8096"
@@ -136,6 +144,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/sonarr:/config
       - ${DATA_PATH:-./data}:/data
+      - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
     networks:
       - internal
 
@@ -150,6 +159,7 @@ services:
     volumes:
       - ${CONFIG_PATH:-./config}/radarr:/config
       - ${DATA_PATH:-./data}:/data
+      - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
     networks:
       - internal
 
@@ -414,7 +424,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./services/shared:/app/shared:ro
-      - ${MEDIA_PATH:-./data/media}:/data/media:ro
+      - ${MEDIA_PATH:-./data/media}:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -445,6 +455,9 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
       - JELLYFIN_URL=http://jellyfin:8096
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-}
       - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
       - ENV=${ENV:-dev}
     ports:

@@ -240,3 +240,110 @@ async def delete_source(
     await db.delete(source)
 
     logger.info("Deleted source %s and its channels for user %s", source_id, user.id)
+
+
+@router.post("/{source_id}/refresh", response_model=SourceCreateResponse)
+async def refresh_source(
+    source_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    x_api_key: str = Header(...),
+) -> SourceCreateResponse:
+    """Re-fetch the M3U from the source URL and re-import all channels.
+
+    Deletes existing channels for this source, then re-parses and imports
+    from the same M3U URL. Useful after updating the M3U file on disk.
+    """
+    user = await _get_user_from_api_key(db, x_api_key)
+
+    result = await db.execute(
+        select(IptvSource).where(
+            IptvSource.id == source_id,
+            IptvSource.user_id == user.id,
+        )
+    )
+    source = result.scalar_one_or_none()
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source not found",
+        )
+
+    # Fetch M3U content (same logic as add_source)
+    if source.m3u_url.startswith("file://"):
+        import pathlib
+        local_path = pathlib.Path(source.m3u_url.removeprefix("file://"))
+        allowed_dir = pathlib.Path("/data/iptv")
+        if not local_path.resolve().is_relative_to(allowed_dir.resolve()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Local files must be under /data/iptv/",
+            )
+        try:
+            m3u_content = local_path.read_text(errors="replace")
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Local M3U file not found: {local_path}",
+            ) from exc
+    else:
+        headers = source.headers_json or {}
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                resp = await client.get(source.m3u_url, headers=headers)
+                resp.raise_for_status()
+                m3u_content = resp.text
+        except httpx.HTTPError as exc:
+            logger.error("Failed to fetch M3U from %s: %s", source.m3u_url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch M3U: {exc}",
+            ) from exc
+
+    parsed_channels = parse_m3u(m3u_content)
+    if not parsed_channels:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No channels found in M3U content",
+        )
+
+    # Delete old channels
+    await db.execute(
+        delete(IptvChannel).where(IptvChannel.source_id == source_id)
+    )
+
+    # Import new channels
+    channel_records: list[IptvChannel] = []
+    for ch in parsed_channels:
+        channel = IptvChannel(
+            user_id=user.id,
+            source_id=source.id,
+            tvg_id=ch.get("tvg_id"),
+            name=ch.get("name", "Unknown"),
+            group_title=ch.get("group_title"),
+            logo=ch.get("logo"),
+            stream_url=ch.get("stream_url", ""),
+        )
+        db.add(channel)
+        channel_records.append(channel)
+
+    await db.flush()
+
+    logger.info(
+        "Refreshed source %s: %d channels for user %s",
+        source.id,
+        len(channel_records),
+        user.id,
+    )
+
+    return SourceCreateResponse(
+        source=SourceResponse(
+            id=source.id,
+            m3u_url=source.m3u_url,
+            epg_url=source.epg_url,
+            source_timezone=source.source_timezone,
+            headers_json=source.headers_json,
+            enabled=source.enabled,
+            channel_count=len(channel_records),
+        ),
+        channels_imported=len(channel_records),
+    )

@@ -99,6 +99,17 @@ class Settings(BaseSettings):
     jellyfin_url: str = "http://jellyfin:8096"
     jellyfin_admin_token: str = ""
 
+    # Google OAuth2
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""  # e.g. https://app.cutdacord.app/auth/google/callback
+
+    # Apple Sign-In
+    apple_client_id: str = ""  # Service ID
+    apple_team_id: str = ""
+    apple_key_id: str = ""
+    apple_private_key: str = ""  # PEM contents
+
     # Encryption (for storing user secrets at rest)
     encryption_key: str = ""
 

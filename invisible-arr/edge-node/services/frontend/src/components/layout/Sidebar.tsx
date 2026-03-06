@@ -96,7 +96,7 @@ export function Sidebar() {
         )}
 
         {/* Reseller section */}
-        {isReseller && (
+        {(isReseller || isAdmin) && (
           <>
             <div className="my-3 border-t border-white/5" />
             <NavLink to="/reseller" className={navLinkClass}>

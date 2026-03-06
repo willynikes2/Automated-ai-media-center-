@@ -73,10 +73,14 @@ export function useCancelJob() {
   });
 }
 
-const TERMINAL: string[] = ['DONE', 'FAILED'];
+const TERMINAL: string[] = ['DONE', 'FAILED', 'DELETED'];
+const NON_ACTIVE: string[] = ['DONE', 'FAILED', 'MONITORED', 'DELETED'];
 export function filterActive(jobs: Job[] | undefined) {
-  return jobs?.filter((j) => !TERMINAL.includes(j.state)) ?? [];
+  return jobs?.filter((j) => !NON_ACTIVE.includes(j.state)) ?? [];
 }
 export function filterCompleted(jobs: Job[] | undefined) {
   return jobs?.filter((j) => TERMINAL.includes(j.state)) ?? [];
+}
+export function filterMonitored(jobs: Job[] | undefined) {
+  return jobs?.filter((j) => j.state === 'MONITORED') ?? [];
 }

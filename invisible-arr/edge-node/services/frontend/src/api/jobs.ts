@@ -2,7 +2,7 @@ import { agentApi } from './client';
 
 export type JobState =
   | 'CREATED' | 'RESOLVING' | 'ADDING' | 'SEARCHING' | 'SELECTED'
-  | 'ACQUIRING' | 'IMPORTING' | 'VERIFYING' | 'DONE' | 'FAILED';
+  | 'ACQUIRING' | 'IMPORTING' | 'VERIFYING' | 'MONITORED' | 'DONE' | 'FAILED' | 'DELETED';
 
 export interface SelectedCandidate {
   title?: string;
@@ -33,6 +33,7 @@ export interface Job {
   retry_count: number;
   created_at: string;
   updated_at: string;
+  last_error: string | null;
 }
 
 export interface JobEvent {
@@ -85,6 +86,10 @@ export async function cancelJob(id: string): Promise<Job> {
 export interface JobProgress {
   percent: number;
   detail: string;
+  speed_bytes: number;
+  size_total: number;
+  size_downloaded: number;
+  time_remaining: string;
 }
 
 export async function getJobProgress(id: string): Promise<JobProgress> {

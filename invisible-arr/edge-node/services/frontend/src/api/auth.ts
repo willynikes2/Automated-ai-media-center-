@@ -107,6 +107,21 @@ export async function loginWithJellyfin(username: string, password: string): Pro
   });
 }
 
+/* ── Google OAuth ────────────────────────────────────────────── */
+
+export async function getGoogleAuthUrl(): Promise<string> {
+  const res = await agentApi.get<{ url: string }>('/v1/auth/google/url');
+  return res.data.url;
+}
+
+export async function loginWithGoogle(code: string, redirectUri: string): Promise<AuthResult> {
+  const res = await agentApi.post<AuthResponse>('/v1/auth/google/callback', {
+    code,
+    redirect_uri: redirectUri,
+  });
+  return mapAuthResponse(res.data, { email: undefined });
+}
+
 /* ── Setup (post-registration onboarding) ────────────────────── */
 
 export async function submitSetup(data: {

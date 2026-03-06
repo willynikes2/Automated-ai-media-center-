@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useJobs, filterActive, filterCompleted, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
+import { useJobs, filterActive, filterCompleted, filterMonitored, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
 import { JobTimeline } from '@/components/jobs/JobTimeline';
 import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
@@ -7,15 +7,16 @@ import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { toast } from '@/components/ui/Toast';
-import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Play } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, RefreshCw, Ban, Cloud, HardDrive, Play, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Job } from '@/api/jobs';
 
-type Filter = 'all' | 'active' | 'done' | 'failed';
+type Filter = 'all' | 'active' | 'monitored' | 'done' | 'failed';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
+  { key: 'monitored', label: 'Waiting' },
   { key: 'done', label: 'Complete' },
   { key: 'failed', label: 'Failed' },
 ];
@@ -78,7 +79,7 @@ function ActiveJobCard({ job }: { job: Job }) {
         </div>
       </div>
 
-      <JobTimeline currentState={job.state} progress={progress >= 0 ? progress : undefined} />
+      <JobTimeline currentState={job.state} progress={progress >= 0 ? progress : undefined} progressData={progressData} />
 
       {job.selected_candidate && (
         <div className="mt-3 pt-3 border-t border-white/5 text-xs text-text-secondary">
@@ -113,6 +114,19 @@ function ActiveJobCard({ job }: { job: Job }) {
   );
 }
 
+function friendlyError(raw: string | null): string | null {
+  if (!raw) return null;
+  if (raw.includes('announced but not released')) return 'Waiting for release';
+  if (raw.includes('in cinemas only')) return 'Waiting for digital release';
+  if (raw.includes('not aired yet')) return 'Waiting to air';
+  if (raw.includes('Content now available')) return 'Now available';
+  if (raw.includes('did not grab a release')) return 'No downloads available';
+  if (raw.includes('Import verification')) return 'Import failed';
+  if (raw.includes('Download stalled')) return 'Download stalled';
+  if (raw.includes('Download failed')) return 'Download failed';
+  return raw.length > 40 ? raw.slice(0, 40) + '...' : raw;
+}
+
 function CompletedRow({ job }: { job: Job }) {
   const isFailed = job.state === 'FAILED';
   const retryMutation = useRetryJob();
@@ -141,7 +155,10 @@ function CompletedRow({ job }: { job: Job }) {
           {job.media_type === 'tv' ? 'TV' : 'Movie'}
           {' · '}
           {new Date(job.updated_at).toLocaleDateString()}
-          {isFailed && job.retry_count > 0 && ` · ${job.retry_count} retries`}
+          {isFailed && job.last_error && (
+            <span className="text-status-failed"> · {friendlyError(job.last_error)}</span>
+          )}
+          {isFailed && !job.last_error && job.retry_count > 0 && ` · ${job.retry_count} retries`}
         </p>
       </div>
       <AcquisitionBadge mode={job.acquisition_mode} method={job.acquisition_method} />
@@ -171,17 +188,20 @@ export function ActivityPage() {
 
   const active = filterActive(jobs);
   const completed = filterCompleted(jobs);
+  const monitored = filterMonitored(jobs);
   const failed = (jobs ?? []).filter((j) => j.state === 'FAILED');
   const done = (jobs ?? []).filter((j) => j.state === 'DONE');
 
   const counts: Record<Filter, number> = {
     all: (jobs ?? []).length,
     active: active.length,
+    monitored: monitored.length,
     done: done.length,
     failed: failed.length,
   };
 
   const showActive = filter === 'all' || filter === 'active';
+  const showMonitored = filter === 'all' || filter === 'monitored';
   const showCompleted = filter === 'all' || filter === 'done';
   const showFailed = filter === 'failed';
 
@@ -213,7 +233,7 @@ export function ActivityPage() {
           <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
             Active ({active.length})
           </h2>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 lg:grid-cols-2">
             {active.map((job) => (
               <ActiveJobCard key={job.id} job={job} />
             ))}
@@ -225,6 +245,42 @@ export function ActivityPage() {
         <Card className="p-6 text-center">
           <Activity className="h-8 w-8 mx-auto text-text-tertiary mb-2" />
           <p className="text-sm text-text-secondary">No active downloads</p>
+        </Card>
+      )}
+
+      {/* Waiting for release */}
+      {showMonitored && monitored.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+            Waiting for Release ({monitored.length})
+          </h2>
+          <Card className="divide-y divide-white/5">
+            {monitored.map((job) => (
+              <Link
+                key={job.id}
+                to={`/requests/${job.id}`}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-bg-secondary/50 transition-colors"
+              >
+                <Clock className="h-4 w-4 text-amber-400 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{job.title}</p>
+                  <p className="text-[10px] text-text-tertiary">
+                    {job.media_type === 'tv' ? 'TV' : 'Movie'}
+                    {' · '}
+                    Auto-downloads when available
+                  </p>
+                </div>
+                <StateBadge state={job.state} />
+              </Link>
+            ))}
+          </Card>
+        </section>
+      )}
+
+      {showMonitored && monitored.length === 0 && filter === 'monitored' && (
+        <Card className="p-6 text-center">
+          <Clock className="h-8 w-8 mx-auto text-text-tertiary mb-2" />
+          <p className="text-sm text-text-secondary">No items waiting for release</p>
         </Card>
       )}
 

@@ -81,7 +81,7 @@ export function JobDetailView({ job }: { job: JobDetailType }) {
 
       {/* Pipeline */}
       <Card className="p-4">
-        <JobTimeline currentState={job.state} events={job.events} progress={progress >= 0 ? progress : undefined} />
+        <JobTimeline currentState={job.state} events={job.events} progress={progress >= 0 ? progress : undefined} progressData={progressData} />
       </Card>
 
       {/* Selected release */}

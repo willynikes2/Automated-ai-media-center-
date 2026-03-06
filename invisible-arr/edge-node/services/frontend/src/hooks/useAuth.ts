@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { loginWithEmail, loginWithJellyfin, register, getCurrentUser } from '@/api/auth';
+import { loginWithEmail, loginWithJellyfin, loginWithGoogle, register, getCurrentUser } from '@/api/auth';
 import type { AuthResult } from '@/api/auth';
 import { useAuthStore } from '@/stores/authStore';
 import type { AuthUser } from '@/stores/authStore';
@@ -45,6 +45,22 @@ export function useJellyfinLogin() {
       loginWithJellyfin(username, password),
     onSuccess: (data) => {
       login(toAuthUser(data), data.jellyfinToken, data.jellyfinUserId);
+      navigate(data.setupComplete ? '/' : '/setup');
+    },
+  });
+}
+
+/* ── Google OAuth ────────────────────────────────────────────── */
+
+export function useGoogleLogin() {
+  const login = useAuthStore((s) => s.login);
+  const navigate = useNavigate();
+
+  return useMutation({
+    mutationFn: ({ code, redirectUri }: { code: string; redirectUri: string }) =>
+      loginWithGoogle(code, redirectUri),
+    onSuccess: (data) => {
+      login(toAuthUser(data));
       navigate(data.setupComplete ? '/' : '/setup');
     },
   });

@@ -109,6 +109,7 @@ class JobListResponse(BaseModel):
     acquisition_method: str | None = None
     streaming_urls: dict | None = None
     retry_count: int
+    last_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -199,6 +200,13 @@ class UserResponse(BaseModel):
     max_requests_per_day: int
     created_at: datetime
     last_login: datetime | None = None
+
+
+class GoogleCallbackRequest(BaseModel):
+    """Body for POST /v1/auth/google/callback."""
+
+    code: str
+    redirect_uri: str
 
 
 class SetupRequest(BaseModel):

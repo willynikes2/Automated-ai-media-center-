@@ -9,8 +9,10 @@ const STATE_LABELS: Record<string, string> = {
   ACQUIRING: 'Downloading',
   IMPORTING: 'Organizing files',
   VERIFYING: 'Checking quality',
+  MONITORED: 'Waiting for Release',
   DONE: 'Complete',
   FAILED: 'Failed',
+  DELETED: 'Removed',
 };
 
 const stateColors: Record<string, string> = {
@@ -22,8 +24,10 @@ const stateColors: Record<string, string> = {
   ACQUIRING: 'bg-orange-500/20 text-orange-400',
   IMPORTING: 'bg-orange-500/20 text-orange-400',
   VERIFYING: 'bg-orange-500/20 text-orange-400',
+  MONITORED: 'bg-amber-500/20 text-amber-400',
   DONE: 'bg-status-available/20 text-status-available',
   FAILED: 'bg-status-failed/20 text-status-failed',
+  DELETED: 'bg-text-tertiary/20 text-text-tertiary',
 };
 
 const ACTIVE_STATES = ['RESOLVING', 'ADDING', 'SEARCHING', 'ACQUIRING', 'IMPORTING', 'VERIFYING'];

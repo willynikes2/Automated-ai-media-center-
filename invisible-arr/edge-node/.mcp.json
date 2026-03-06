@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "youtube-transcript": {
+      "command": "npx",
+      "args": ["-y", "@emit-ia/youtube-transcript-mcp"]
+    }
+  }
+}

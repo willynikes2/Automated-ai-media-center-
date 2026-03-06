@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import sentry_sdk
@@ -29,6 +30,7 @@ from worker import process_job, get_job  # noqa: E402
 
 MAX_RETRIES = 5
 RETRY_DELAYS = [30, 60, 120, 300, 600]  # seconds between retries
+MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 
 from shared.logging import setup_logging  # noqa: E402
 
@@ -83,9 +85,53 @@ async def _run() -> None:
         logger.exception("Failed to connect to Redis")
         raise
 
+    # Recover stale in-flight jobs from previous crash -----------------------
+    await _recover_stale_jobs()
+
     # Consumer loop ----------------------------------------------------------
-    logger.info("Entering job consumer loop")
+    logger.info("Entering job consumer loop (max_concurrent=%d)", MAX_CONCURRENT_JOBS)
     monitor_task = asyncio.create_task(monitor_downloads(_shutdown_event))
+    monitored_checker_task = asyncio.create_task(_check_monitored_jobs(_shutdown_event))
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+    active_tasks: set[asyncio.Task] = set()
+
+    def _task_done(task: asyncio.Task) -> None:
+        active_tasks.discard(task)
+        if task.exception() and not task.cancelled():
+            logger.exception(
+                "Job task raised unhandled exception",
+                exc_info=task.exception(),
+            )
+
+    async def _run_job(job_id: str) -> None:
+        async with semaphore:
+            try:
+                await process_job(job_id)
+                try:
+                    job = await get_job(job_id)
+                    if job.state in (JobState.DONE, JobState.FAILED):
+                        logger.info("Job %s finished with state %s", job_id, job.state.value)
+                    elif job.state == JobState.VERIFYING:
+                        logger.info("Job %s handed off to QC (state=VERIFYING)", job_id)
+                    elif job.state == JobState.MONITORED:
+                        logger.info("Job %s is now MONITORED (waiting for release)", job_id)
+                    else:
+                        logger.warning("Job %s ended in unexpected state %s", job_id, job.state.value)
+                except Exception:
+                    logger.info("Job %s processing returned without error", job_id)
+            except Exception:
+                logger.exception("Unhandled exception while processing job %s", job_id)
+                try:
+                    await _fail_job(job_id)
+                except Exception:
+                    logger.exception("Could not transition job %s to FAILED", job_id)
+
+            # Check retry regardless of outcome
+            try:
+                await _maybe_retry(job_id)
+            except Exception:
+                logger.exception("Error checking retry for job %s", job_id)
+
     while not _shutdown_event.is_set():
         try:
             job_id = await dequeue_job(timeout=2)
@@ -95,40 +141,31 @@ async def _run() -> None:
             continue
 
         if job_id is None:
-            # dequeue_job returned None (timeout / empty queue) -- loop back
             continue
 
-        logger.info("Dequeued job %s", job_id)
-        try:
-            await process_job(job_id)
-            # Check actual job state — process_job may return without reaching DONE
-            try:
-                job = await get_job(job_id)
-                if job.state in (JobState.DONE, JobState.FAILED):
-                    logger.info("Job %s finished with state %s", job_id, job.state.value)
-                elif job.state == JobState.VERIFYING:
-                    logger.info("Job %s handed off to QC (state=VERIFYING)", job_id)
-                else:
-                    logger.warning("Job %s ended processing in unexpected state %s", job_id, job.state.value)
-            except Exception:
-                logger.info("Job %s processing returned without error", job_id)
-        except Exception:
-            logger.exception("Unhandled exception while processing job %s", job_id)
-            try:
-                await _fail_job(job_id)
-            except Exception:
-                logger.exception("Could not transition job %s to FAILED", job_id)
-
-        # Check if the job failed and should be retried
-        try:
-            await _maybe_retry(job_id)
-        except Exception:
-            logger.exception("Error checking retry for job %s", job_id)
+        logger.info("Dequeued job %s (%d/%d slots in use)", job_id, MAX_CONCURRENT_JOBS - semaphore._value, MAX_CONCURRENT_JOBS)
+        task = asyncio.create_task(_run_job(job_id), name=f"job-{job_id[:8]}")
+        active_tasks.add(task)
+        task.add_done_callback(_task_done)
 
     # Shutdown cleanup -------------------------------------------------------
+    if active_tasks:
+        logger.info("Waiting for %d active job(s) to finish...", len(active_tasks))
+        done, pending = await asyncio.wait(active_tasks, timeout=30)
+        for t in pending:
+            logger.warning("Cancelling job task %s (shutdown timeout)", t.get_name())
+            t.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=5)
+
     monitor_task.cancel()
+    monitored_checker_task.cancel()
     try:
         await monitor_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await monitored_checker_task
     except asyncio.CancelledError:
         pass
 
@@ -137,6 +174,66 @@ async def _run() -> None:
     engine = get_engine()
     await engine.dispose()
     logger.info("Resources released, goodbye")
+
+
+async def _recover_stale_jobs() -> None:
+    """Re-enqueue jobs stuck in transient states from a previous worker crash.
+
+    On startup, any job in RESOLVING/ADDING/ACQUIRING/IMPORTING/VERIFYING
+    has no active worker processing it.  We reset them to CREATED and
+    re-enqueue so the pipeline restarts cleanly.
+    """
+    from shared.models import Job, JobState, JobEvent  # noqa: E402
+    from sqlalchemy import select
+    from sqlalchemy import update as sa_update
+
+    TRANSIENT_STATES = (
+        JobState.RESOLVING.value,
+        JobState.ADDING.value,
+        JobState.ACQUIRING.value,
+        JobState.IMPORTING.value,
+        JobState.VERIFYING.value,
+    )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(Job).where(Job.state.in_(TRANSIENT_STATES))
+        )
+        stale_jobs = list(result.scalars().all())
+
+    if not stale_jobs:
+        logger.info("No stale in-flight jobs found on startup")
+        return
+
+    logger.warning("Found %d stale in-flight jobs from previous run, recovering", len(stale_jobs))
+
+    for job in stale_jobs:
+        try:
+            now = datetime.utcnow()
+            async with factory() as session:
+                await session.execute(
+                    sa_update(Job).where(Job.id == job.id).values(
+                        state=JobState.CREATED.value,
+                        arr_queue_id=None,
+                        updated_at=now,
+                    )
+                )
+                event = JobEvent(
+                    job_id=job.id,
+                    state=JobState.CREATED.value,
+                    message=f"Recovered from stale state '{job.state}' after worker restart",
+                    created_at=now,
+                )
+                session.add(event)
+                await session.commit()
+            await enqueue_job(str(job.id))
+            logger.info(
+                "Recovered stale job %s (%s) from state %s -> CREATED",
+                job.id, getattr(job, 'query', 'unknown'), job.state,
+            )
+        except Exception:
+            logger.exception("Failed to recover stale job %s", job.id)
 
 
 async def _maybe_retry(job_id: str) -> None:
@@ -153,8 +250,8 @@ async def _maybe_retry(job_id: str) -> None:
             select(Job).where(Job.id == uuid.UUID(job_id))
         )
         job = result.scalar_one_or_none()
-        if job is None or job.state != JobState.FAILED:
-            return
+        if job is None or job.state not in (JobState.FAILED,):
+            return  # Only retry FAILED jobs (skip MONITORED, DONE, etc.)
         if job.retry_count >= MAX_RETRIES:
             logger.info("Job %s exceeded max retries (%d), staying FAILED", job_id, MAX_RETRIES)
             return
@@ -267,6 +364,119 @@ async def _fail_job(job_id: str) -> None:
         session.add(event)
         await session.commit()
         logger.info("Transitioned job %s to FAILED (post-crash)", job_id)
+
+
+# ---------------------------------------------------------------------------
+# MONITORED job checker
+# ---------------------------------------------------------------------------
+MONITORED_CHECK_INTERVAL = int(os.environ.get("MONITORED_CHECK_INTERVAL", "1800"))  # 30 min
+
+
+async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
+    """Periodically check MONITORED jobs to see if content is now available.
+
+    For movies: checks Radarr hasFile.
+    For TV: checks Sonarr episodeFile existence.
+    When available, re-enqueues the job so it resumes the pipeline.
+    """
+    from shared.models import Job, JobState, JobEvent  # noqa: E402
+    from shared.radarr_client import RadarrClient
+    from shared.sonarr_client import SonarrClient
+    from sqlalchemy import select
+    from sqlalchemy import update as sa_update
+
+    logger.info("MONITORED job checker starting (interval=%ds)", MONITORED_CHECK_INTERVAL)
+
+    # Wait a bit on startup before first check
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+        return  # Shutdown requested during initial wait
+    except asyncio.TimeoutError:
+        pass
+
+    while not shutdown_event.is_set():
+        try:
+            factory = get_session_factory()
+            async with factory() as session:
+                result = await session.execute(
+                    select(Job).where(Job.state == JobState.MONITORED.value)
+                )
+                monitored_jobs = list(result.scalars().all())
+
+            if monitored_jobs:
+                logger.info("Checking %d MONITORED jobs for availability", len(monitored_jobs))
+
+            for job in monitored_jobs:
+                if shutdown_event.is_set():
+                    break
+                try:
+                    available = False
+                    if job.media_type == "movie" and job.radarr_movie_id:
+                        async with RadarrClient() as radarr:
+                            movie = await radarr.get_movie(job.radarr_movie_id)
+                            status = movie.get("status", "")
+                            has_file = movie.get("hasFile", False)
+                            # Available if status changed from announced/inCinemas to released
+                            if status not in ("announced", "inCinemas") or has_file:
+                                available = True
+                    elif job.media_type == "tv" and job.sonarr_series_id:
+                        if job.season is not None and job.episode is not None:
+                            async with SonarrClient() as sonarr:
+                                episodes = await sonarr.get_episodes(job.sonarr_series_id, job.season)
+                                target_ep = next(
+                                    (e for e in episodes if e.get("episodeNumber") == job.episode),
+                                    None,
+                                )
+                                if target_ep:
+                                    if target_ep.get("hasFile"):
+                                        available = True
+                                    else:
+                                        air_date = target_ep.get("airDateUtc")
+                                        if air_date:
+                                            from datetime import datetime, timezone
+                                            try:
+                                                aired = datetime.fromisoformat(air_date.replace("Z", "+00:00"))
+                                                if aired <= datetime.now(timezone.utc):
+                                                    available = True
+                                            except (ValueError, TypeError):
+                                                pass
+                        else:
+                            # Full season — just re-check, Sonarr will handle it
+                            available = True
+
+                    if available:
+                        logger.info("MONITORED job %s (%s) — content now available, re-enqueuing", job.id, job.title)
+                        now = datetime.utcnow()
+                        async with factory() as session:
+                            await session.execute(
+                                sa_update(Job).where(Job.id == job.id).values(
+                                    state=JobState.CREATED.value,
+                                    updated_at=now,
+                                )
+                            )
+                            event = JobEvent(
+                                job_id=job.id,
+                                state=JobState.CREATED.value,
+                                message="Content now available — resuming download",
+                                created_at=now,
+                            )
+                            session.add(event)
+                            await session.commit()
+                        await enqueue_job(str(job.id))
+                except Exception:
+                    logger.exception("Error checking MONITORED job %s", job.id)
+
+        except Exception:
+            logger.exception("MONITORED checker cycle failed")
+
+        # Wait for next cycle or shutdown
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=MONITORED_CHECK_INTERVAL)
+            break
+        except asyncio.TimeoutError:
+            continue
+
+    logger.info("MONITORED job checker stopped")
 
 
 # ---------------------------------------------------------------------------

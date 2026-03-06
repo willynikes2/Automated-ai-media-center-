@@ -7,6 +7,7 @@ download queue and reports progress until completion.
 Job lifecycle:
   CREATED -> RESOLVING -> ADDING -> ACQUIRING -> IMPORTING -> VERIFYING -> DONE
   (FAILED possible at any step; retries handled by main.py)
+  (MONITORED when content is unreleased; background task resumes when available)
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ SONARR_QUALITY_PROFILE_ID = 7
 
 # Timeouts
 ARR_GRAB_TIMEOUT_STREAM = 120    # stream-mode: short wait, then fallback to Zurg lookup
-ARR_GRAB_TIMEOUT_DOWNLOAD = 600  # download-mode: allow slower indexer/queue grabs
+ARR_GRAB_TIMEOUT_DOWNLOAD = 120  # download-mode: allow slower indexer/queue grabs
 DOWNLOAD_TIMEOUT = 3600      # seconds to wait for download completion
 DOWNLOAD_POLL_INTERVAL = 15  # seconds between queue polls
 IMPORT_TIMEOUT = 300         # seconds to wait for Arr to import after download
@@ -177,6 +178,14 @@ async def ensure_user_media_permissions(user: User) -> None:
     await asyncio.to_thread(_apply_permissions_tree, user_root, uid, gid)
 
 
+class ContentNotReleasedError(Exception):
+    """Raised when content is not yet digitally available (announced/inCinemas/unaired)."""
+
+    def __init__(self, message: str, monitor_reason: str = ""):
+        super().__init__(message)
+        self.monitor_reason = monitor_reason or message
+
+
 def diagnose_failure(error: Exception) -> str:
     """Map raw errors to actionable diagnostic messages."""
     error_str = str(error).lower()
@@ -242,7 +251,7 @@ async def process_job(job_id: str) -> None:
     await transition(job, JobState.ADDING, f"Adding to {'Sonarr' if job.media_type == 'tv' else 'Radarr'}")
 
     try:
-        method = "stream" if job.acquisition_mode == "stream" else None
+        method = None  # stream mode disabled; always use download path
         if job.media_type == "movie":
             arr_id = await _add_to_radarr(job, user, tmdb_id, canonical_title)
             await update_job_field(
@@ -273,6 +282,14 @@ async def process_job(job_id: str) -> None:
             already_had_file = await _monitor_radarr_download(job)
         else:
             already_had_file = await _monitor_sonarr_download(job)
+    except ContentNotReleasedError as exc:
+        await transition(
+            job, JobState.MONITORED,
+            exc.monitor_reason,
+            metadata={"original_error": str(exc)},
+        )
+        logger.info("Job %s -> MONITORED: %s", job.id, exc.monitor_reason)
+        return
     except TimeoutError as exc:
         await transition(job, JobState.FAILED, diagnose_failure(exc))
         return
@@ -283,50 +300,14 @@ async def process_job(job_id: str) -> None:
         await clear_download_progress(str(job.id))
 
     # ------------------------------------------------------------------
-    # 4a. STREAM MODE — create .strm pointer in the user library
-    #     Skip if file already exists locally (no Zurg source to point to)
+    # 4a. STREAM MODE — disabled, treat as download mode
+    #     Streaming via Zurg is a future roadmap item.
+    #     Any legacy "stream" jobs fall through to download path.
     # ------------------------------------------------------------------
-    if job.acquisition_mode == "stream" and already_had_file:
+    if job.acquisition_mode == "stream":
         logger.info(
-            "File already available locally for job %s, skipping stream pointer",
-            job.id,
+            "Stream mode disabled; treating job %s as download", job.id,
         )
-        # Fall through to download-mode verification path
-
-    elif job.acquisition_mode == "stream":
-        await transition(job, JobState.IMPORTING, "Creating Zurg stream pointer")
-        try:
-            strm_path, target_url = await _materialize_stream_pointer(
-                job=job,
-                user=user,
-                canonical_title=canonical_title,
-                year=year,
-            )
-            await update_job_field(
-                job,
-                imported_path=strm_path,
-                streaming_urls={
-                    "primary": target_url,
-                    "strm_path": strm_path,
-                },
-            )
-            await _trigger_jellyfin_refresh()
-        except Exception as exc:
-            await transition(
-                job,
-                JobState.FAILED,
-                f"Failed to create streaming pointer: {diagnose_failure(exc)}",
-            )
-            return
-
-        await transition(
-            job,
-            JobState.DONE,
-            "Stream is ready in library",
-            metadata={"acquisition_mode": "stream", "imported_path": strm_path},
-        )
-        await clear_rdt_ready(str(job.id))
-        return
 
     # ------------------------------------------------------------------
     # 4b. DOWNLOAD MODE — Sonarr/Radarr handle import automatically
@@ -347,8 +328,18 @@ async def process_job(job_id: str) -> None:
                     await update_storage_used(job.user_id, size_gb)
             except Exception:
                 logger.exception("Failed to update storage tracking")
+        else:
+            await transition(
+                job, JobState.FAILED,
+                "Import verification failed: no matching file found in user library",
+            )
+            return
     except Exception as exc:
-        logger.warning("Import verification issue (non-fatal): %s", exc)
+        await transition(
+            job, JobState.FAILED,
+            f"Import verification failed: {diagnose_failure(exc)}",
+        )
+        return
 
     # ------------------------------------------------------------------
     # 5. VERIFYING — QC via ffprobe
@@ -423,8 +414,33 @@ async def _add_to_sonarr(
         existing = await sonarr.get_series_by_tvdb(tvdb_id)
         if existing:
             series_id = existing["id"]
-            logger.info("Series already in Sonarr (id=%d), triggering search", series_id)
-            if job.season is not None:
+            logger.info("Series already in Sonarr (id=%d), ensuring monitored + triggering search", series_id)
+
+            # Ensure series is monitored
+            if not existing.get("monitored"):
+                existing["monitored"] = True
+                await sonarr.update_series(existing)
+                logger.info("Enabled monitoring on series %d", series_id)
+
+            # Ensure target season is monitored
+            await _ensure_sonarr_monitored(sonarr, existing, job)
+
+            if job.season is not None and job.episode is not None:
+                # Search for specific episode to avoid rate-limiting indexers
+                episodes = await sonarr.get_episodes(series_id, job.season)
+                target_ep = next(
+                    (e for e in episodes if e.get("episodeNumber") == job.episode),
+                    None,
+                )
+                if target_ep:
+                    if not target_ep.get("monitored"):
+                        target_ep["monitored"] = True
+                        await sonarr.update_episode(target_ep)
+                    await sonarr.search_episodes([target_ep["id"]])
+                else:
+                    logger.warning("Episode S%02dE%02d not found, searching full season", job.season, job.episode)
+                    await sonarr.search_season(series_id, job.season)
+            elif job.season is not None:
                 await sonarr.search_season(series_id, job.season)
             else:
                 await sonarr.search_series(series_id)
@@ -436,11 +452,10 @@ async def _add_to_sonarr(
             raise ValueError(f"Sonarr lookup failed for tvdb:{tvdb_id}")
         lookup = results[0]
 
-        # Determine monitor type
-        if job.season is not None and job.episode is not None:
-            monitor = "none"  # We'll search for the specific episode after adding
-        elif job.season is not None:
-            monitor = "none"  # We'll search for the specific season
+        # Determine monitor type — use "none" initially, then enable
+        # monitoring on just the target season/episodes so Sonarr grabs them.
+        if job.season is not None:
+            monitor = "none"
         else:
             monitor = "all"
 
@@ -457,15 +472,20 @@ async def _add_to_sonarr(
         series_id = series["id"]
         logger.info("Added series to Sonarr: %s (id=%d)", title, series_id)
 
+        # Ensure monitoring on target season/episodes so Sonarr will grab releases
+        await _ensure_sonarr_monitored(sonarr, series, job)
+
         # If specific season/episode requested, trigger targeted search
         if job.season is not None and job.episode is not None:
-            # Find the episode ID
             episodes = await sonarr.get_episodes(series_id, job.season)
             target_ep = next(
                 (e for e in episodes if e.get("episodeNumber") == job.episode),
                 None,
             )
             if target_ep:
+                if not target_ep.get("monitored"):
+                    target_ep["monitored"] = True
+                    await sonarr.update_episode(target_ep)
                 await sonarr.search_episodes([target_ep["id"]])
             else:
                 logger.warning("Episode S%02dE%02d not found, searching full season", job.season, job.episode)
@@ -509,6 +529,30 @@ async def _ensure_radarr_root_folder(radarr: RadarrClient, path: str) -> str:
             )
             return str(fallback)
         raise
+
+
+async def _ensure_sonarr_monitored(sonarr: SonarrClient, series: dict, job: Job) -> None:
+    """Ensure the target season (and series) are monitored in Sonarr.
+
+    Sonarr will not grab releases for unmonitored seasons/episodes, so we
+    must enable monitoring before triggering a search.
+    """
+    series_id = series["id"]
+    changed = False
+
+    if not series.get("monitored"):
+        series["monitored"] = True
+        changed = True
+
+    if job.season is not None:
+        for s in series.get("seasons", []):
+            if s["seasonNumber"] == job.season and not s.get("monitored"):
+                s["monitored"] = True
+                changed = True
+
+    if changed:
+        await sonarr.update_series(series)
+        logger.info("Enabled monitoring on series %d (season=%s)", series_id, job.season)
 
 
 async def _ensure_sonarr_root_folder(sonarr: SonarrClient, path: str) -> str:
@@ -559,6 +603,17 @@ async def _monitor_radarr_download(job: Job) -> bool:
     async with RadarrClient() as radarr:
         # Phase 1: Wait for Arr to grab a release
         logger.info("Waiting for Radarr to grab a release for movie %d", movie_id)
+
+        # Fast-fail: check if movie is released
+        movie_info = await radarr.get_movie(movie_id)
+        movie_status = movie_info.get("status", "")
+        if movie_status in ("announced", "inCinemas"):
+            status_label = "in cinemas only" if movie_status == "inCinemas" else "announced but not released"
+            raise ContentNotReleasedError(
+                f"Movie is {status_label} — no digital release available for download",
+                monitor_reason=f"Movie {status_label}; Radarr will monitor for digital release",
+            )
+
         grab_timeout = (
             ARR_GRAB_TIMEOUT_STREAM
             if job.acquisition_mode == "stream"
@@ -620,6 +675,55 @@ async def _monitor_sonarr_download(job: Job) -> bool:
     async with SonarrClient() as sonarr:
         # Phase 1: Wait for grab
         logger.info("Waiting for Sonarr to grab a release for series %d", series_id)
+
+        # Fast-fail: check if episode(s) have aired
+        from datetime import datetime, timezone
+        if job.season is not None and job.episode is not None:
+            # Specific episode request
+            episodes = await sonarr.get_episodes(series_id, job.season)
+            target_ep = next(
+                (e for e in episodes if e.get("episodeNumber") == job.episode),
+                None,
+            )
+            if target_ep:
+                air_date = target_ep.get("airDateUtc")
+                if air_date:
+                    try:
+                        aired = datetime.fromisoformat(air_date.replace("Z", "+00:00"))
+                        if aired > datetime.now(timezone.utc):
+                            raise ContentNotReleasedError(
+                                f"Episode has not aired yet (airs {aired.strftime('%Y-%m-%d')})",
+                                monitor_reason=f"Episode airs {aired.strftime('%Y-%m-%d')}; Sonarr will monitor",
+                            )
+                    except (ValueError, TypeError):
+                        pass  # Malformed date — proceed normally
+                elif not air_date:
+                    # No air date at all — not yet scheduled
+                    raise ContentNotReleasedError(
+                        "Episode has not aired yet (no air date announced)",
+                        monitor_reason="Episode has no air date; Sonarr will monitor",
+                    )
+        elif job.season is not None:
+            # Season-level request — check if ANY episode in the season has aired
+            episodes = await sonarr.get_episodes(series_id, job.season)
+            now = datetime.now(timezone.utc)
+            any_aired = False
+            for ep in episodes:
+                air_date = ep.get("airDateUtc")
+                if air_date:
+                    try:
+                        aired = datetime.fromisoformat(air_date.replace("Z", "+00:00"))
+                        if aired <= now:
+                            any_aired = True
+                            break
+                    except (ValueError, TypeError):
+                        pass
+            if not any_aired and episodes:
+                raise ContentNotReleasedError(
+                    "No episodes in this season have aired yet",
+                    monitor_reason="Season has no aired episodes; Sonarr will monitor",
+                )
+
         grab_timeout = (
             ARR_GRAB_TIMEOUT_STREAM
             if job.acquisition_mode == "stream"
@@ -633,7 +737,15 @@ async def _monitor_sonarr_download(job: Job) -> bool:
                 return False
 
             queue = await sonarr.get_queue()
-            queue_item = _find_queue_item(queue, "seriesId", series_id)
+            # Prefer episode-level match to avoid cross-job interference
+            queue_item = None
+            if job.episode is not None:
+                for rec in queue.get("records", []):
+                    if rec.get("seriesId") == series_id and rec.get("episode", {}).get("episodeNumber") == job.episode and rec.get("episode", {}).get("seasonNumber") == job.season:
+                        queue_item = rec
+                        break
+            if not queue_item:
+                queue_item = _find_queue_item(queue, "seriesId", series_id)
             if queue_item:
                 await _capture_queue_correlation(job, queue_item)
                 logger.info("Sonarr grabbed release: %s", queue_item.get("title", "unknown"))
@@ -797,7 +909,10 @@ async def _wait_for_import_radarr(radarr: RadarrClient, movie_id: int) -> None:
         await asyncio.sleep(10)
         elapsed += 10
 
-    logger.warning("Import not confirmed within %ds — proceeding anyway", IMPORT_TIMEOUT)
+    raise TimeoutError(
+        f"Radarr import not confirmed within {IMPORT_TIMEOUT}s — "
+        f"movie {movie_id} still has no file"
+    )
 
 
 async def _wait_for_import_sonarr(sonarr: SonarrClient, job: Job) -> None:
@@ -826,7 +941,10 @@ async def _wait_for_import_sonarr(sonarr: SonarrClient, job: Job) -> None:
         await asyncio.sleep(10)
         elapsed += 10
 
-    logger.warning("Sonarr import not confirmed within %ds — proceeding anyway", IMPORT_TIMEOUT)
+    raise TimeoutError(
+        f"Sonarr import not confirmed within {IMPORT_TIMEOUT}s — "
+        f"series {job.sonarr_series_id} still has no file"
+    )
 
 
 # ===========================================================================
@@ -995,8 +1113,71 @@ async def _trigger_jellyfin_refresh() -> None:
 # ===========================================================================
 
 
+IMPORT_POLL_INTERVAL = 10  # seconds between import verification polls
+IMPORT_POLL_MAX_WAIT = 300  # total seconds to wait for Arr to finish importing
+
+
 async def _verify_import(job: Job, user: User) -> str | None:
-    """Check that the file landed in the user's library. Returns the path."""
+    """Check that the file landed in the user's library.
+
+    Radarr/Sonarr may still be importing (copying/hardlinking) when this is
+    called — especially for RD-cached content where rdt-client finishes
+    instantly.  We poll for up to IMPORT_POLL_MAX_WAIT seconds before giving up.
+    """
+    elapsed = 0
+    while True:
+        result = await _check_import_once(job, user)
+        if result:
+            return result
+
+        if elapsed >= IMPORT_POLL_MAX_WAIT:
+            # Before giving up, check if Arr still has the item queued (importing)
+            still_importing = False
+            try:
+                if job.media_type == "movie" and job.radarr_movie_id:
+                    async with RadarrClient() as radarr:
+                        queue = await radarr.get_queue()
+                        item = _find_queue_item(queue, "movieId", job.radarr_movie_id)
+                        if item:
+                            state = item.get("trackedDownloadState", "")
+                            if state in ("importPending", "importBlocked", "importing"):
+                                still_importing = True
+                elif job.sonarr_series_id:
+                    async with SonarrClient() as sonarr:
+                        queue = await sonarr.get_queue()
+                        item = _find_queue_item(queue, "seriesId", job.sonarr_series_id)
+                        if item:
+                            state = item.get("trackedDownloadState", "")
+                            if state in ("importPending", "importBlocked", "importing"):
+                                still_importing = True
+            except Exception:
+                logger.debug("Could not check Arr queue during import wait", exc_info=True)
+
+            if still_importing:
+                logger.info(
+                    "Import still in progress in Arr queue for job %s, extending wait",
+                    job.id,
+                )
+                elapsed = max(0, elapsed - 120)  # give another 120s
+            else:
+                break
+
+        logger.info(
+            "Import not yet visible for job %s, waiting %ds (elapsed %d/%ds)",
+            job.id, IMPORT_POLL_INTERVAL, elapsed, IMPORT_POLL_MAX_WAIT,
+        )
+        await asyncio.sleep(IMPORT_POLL_INTERVAL)
+        elapsed += IMPORT_POLL_INTERVAL
+
+    logger.warning(
+        "Import verification exhausted for job %s after %ds — no file found",
+        job.id, elapsed,
+    )
+    return None
+
+
+async def _check_import_once(job: Job, user: User) -> str | None:
+    """Single-shot check that the file landed in the user's library."""
     config = get_config()
     user_media = Path(config.media_path) / "users" / str(user.id)
 
@@ -1027,13 +1208,20 @@ async def _verify_import(job: Job, user: User) -> str | None:
             except Exception:
                 logger.exception("Failed to get episode file path from Sonarr")
 
-    # Fallback: scan user's media directory
+    # Fallback: scan user's media directory, matching by job title
     media_type_dir = "Movies" if job.media_type == "movie" else "TV"
     search_dir = user_media / media_type_dir
     if search_dir.exists():
         video_exts = {".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts"}
+        # Build a safe title prefix to match against directory names
+        safe_title = _sanitize_name(job.title or job.query or "")
+        title_lower = safe_title.lower()
+
         for f in sorted(search_dir.rglob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
             if f.is_file() and f.suffix.lower() in video_exts:
-                return str(f)
+                # Only return files whose parent path contains the job title
+                parent_lower = str(f.parent).lower()
+                if title_lower and title_lower in parent_lower:
+                    return str(f)
 
     return None

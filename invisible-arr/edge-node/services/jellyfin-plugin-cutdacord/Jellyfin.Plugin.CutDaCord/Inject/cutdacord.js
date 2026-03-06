@@ -269,6 +269,7 @@
                 else return;
 
                 injectRequestButton(item, tmdbId, mediaType);
+                injectDeleteButton(item, mediaType);
             }).catch(function (err) {
                 console.warn('[CutDaCord] Failed to fetch item:', err);
             });
@@ -333,21 +334,21 @@
         var posterContainer = document.createElement('div');
         posterContainer.className = 'cutdacord-modal-poster';
 
-        if (typeof ApiClient !== 'undefined' && item.Id) {
-            var posterUrl = ApiClient.getImageUrl(item.Id, { type: 'Primary', maxWidth: 185 });
-            var validatedUrl = sanitizeImageUrl(posterUrl, [
-                window.location.origin,
-                'http://localhost',
-                'http://127.0.0.1',
-                TMDB_IMG
-            ]);
-            if (validatedUrl) {
-                var posterImg = document.createElement('img');
-                posterImg.src = validatedUrl;
-                posterImg.alt = '';
-                posterImg.className = 'cutdacord-poster-img';
-                posterContainer.appendChild(posterImg);
-            }
+        var posterUrl = null;
+        if (item._tmdbPoster) {
+            posterUrl = sanitizeImageUrl(TMDB_IMG + '/w185' + item._tmdbPoster, [TMDB_IMG]);
+        } else if (typeof ApiClient !== 'undefined' && item.Id) {
+            posterUrl = sanitizeImageUrl(
+                ApiClient.getImageUrl(item.Id, { type: 'Primary', maxWidth: 185 }),
+                [window.location.origin, 'http://localhost', 'http://127.0.0.1', TMDB_IMG]
+            );
+        }
+        if (posterUrl) {
+            var posterImg = document.createElement('img');
+            posterImg.src = posterUrl;
+            posterImg.alt = '';
+            posterImg.className = 'cutdacord-poster-img';
+            posterContainer.appendChild(posterImg);
         }
 
         var titleEl = document.createElement('div');
@@ -655,6 +656,511 @@
     }
 
     /* ------------------------------------------------------------------ */
+    /*  Delete button on detail pages                                      */
+    /* ------------------------------------------------------------------ */
+
+    function injectDeleteButton(item, mediaType) {
+        waitForElement('.mainDetailButtons, .detailButtons').then(function (container) {
+            if (!container) return;
+            if (container.querySelector('.cutdacord-delete-btn')) return;
+
+            // Check if item is in user's library
+            api('GET', '/v1/library?media_type=' + encodeURIComponent(mediaType)).then(function (data) {
+                if (!data || !data.items || data.items.length === 0) return;
+
+                // Match by title (folder name contains item name)
+                var itemName = item.Name || '';
+                var matchedItem = null;
+                for (var i = 0; i < data.items.length; i++) {
+                    var libItem = data.items[i];
+                    if (libItem.title === itemName || libItem.folder.indexOf(itemName) !== -1) {
+                        matchedItem = libItem;
+                        break;
+                    }
+                }
+
+                if (!matchedItem) return;
+
+                // Re-check container still exists and no duplicate
+                var freshContainer = document.querySelector('.mainDetailButtons, .detailButtons');
+                if (!freshContainer || freshContainer.querySelector('.cutdacord-delete-btn')) return;
+
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'cutdacord-delete-btn raised-mini-button';
+                btn.setAttribute('is', 'emby-button');
+
+                var icon = document.createElement('span');
+                icon.className = 'material-icons cutdacord-btn-icon';
+                icon.textContent = 'delete';
+
+                var label = document.createElement('span');
+                label.textContent = 'Remove';
+
+                btn.appendChild(icon);
+                btn.appendChild(label);
+
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openDeleteModal(item, matchedItem, mediaType);
+                });
+
+                freshContainer.appendChild(btn);
+            });
+        });
+    }
+
+    function openDeleteModal(item, libraryItem, mediaType) {
+        closeRequestModal();
+
+        var overlay = document.createElement('div');
+        overlay.className = 'cutdacord-modal-overlay';
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeRequestModal();
+        });
+
+        var modal = document.createElement('div');
+        modal.className = 'cutdacord-modal';
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+
+        // Header
+        var header = document.createElement('div');
+        header.className = 'cutdacord-modal-header';
+
+        var titleEl = document.createElement('div');
+        titleEl.className = 'cutdacord-modal-title';
+
+        var titleText = document.createElement('h2');
+        titleText.textContent = 'Remove ' + (item.Name || 'this item') + '?';
+        titleEl.appendChild(titleText);
+
+        var sizeInfo = document.createElement('p');
+        sizeInfo.className = 'cutdacord-modal-overview';
+        var sizeGb = (libraryItem.size_bytes / (1024 * 1024 * 1024)).toFixed(2);
+        sizeInfo.textContent = 'This will remove the file from your library (' + sizeGb + ' GB).';
+        titleEl.appendChild(sizeInfo);
+
+        header.appendChild(titleEl);
+
+        var closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'cutdacord-modal-close';
+        closeBtn.textContent = '\u00D7';
+        closeBtn.setAttribute('aria-label', 'Close');
+        closeBtn.addEventListener('click', closeRequestModal);
+        header.appendChild(closeBtn);
+
+        modal.appendChild(header);
+
+        // Body with scope options for TV
+        var body = document.createElement('div');
+        body.className = 'cutdacord-modal-body';
+
+        var deleteScope = 'file';
+        if (mediaType === 'tv') {
+            var scopeGroup = document.createElement('div');
+            scopeGroup.className = 'cutdacord-mode-group';
+
+            var legend = document.createElement('div');
+            legend.className = 'cutdacord-mode-legend';
+            legend.textContent = 'What to remove';
+            scopeGroup.appendChild(legend);
+
+            var radioContainer = document.createElement('div');
+            radioContainer.className = 'cutdacord-mode-radios';
+            radioContainer.style.flexDirection = 'column';
+            radioContainer.style.gap = '0.5rem';
+
+            var scopes = [
+                { value: 'file', label: 'This episode only' },
+                { value: 'season', label: 'Entire season' },
+                { value: 'series', label: 'Entire series' }
+            ];
+
+            for (var i = 0; i < scopes.length; i++) {
+                var wrapper = document.createElement('label');
+                wrapper.className = 'cutdacord-radio-label';
+
+                var radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'cutdacord_del_scope';
+                radio.value = scopes[i].value;
+                radio.className = 'cutdacord-radio';
+                if (i === 0) radio.checked = true;
+
+                var span = document.createElement('span');
+                span.textContent = scopes[i].label;
+
+                wrapper.appendChild(radio);
+                wrapper.appendChild(span);
+                radioContainer.appendChild(wrapper);
+            }
+
+            scopeGroup.appendChild(radioContainer);
+            body.appendChild(scopeGroup);
+        }
+
+        // Delete button
+        var deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'cutdacord-submit-btn cutdacord-delete-submit';
+        deleteBtn.textContent = 'Remove from Library';
+
+        deleteBtn.addEventListener('click', function () {
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Removing...';
+
+            if (mediaType === 'tv') {
+                var checked = document.querySelector('input[name="cutdacord_del_scope"]:checked');
+                deleteScope = checked ? checked.value : 'file';
+            } else {
+                deleteScope = 'file';
+            }
+
+            var payload = {
+                file_path: libraryItem.file_path,
+                media_type: mediaType,
+                delete_scope: deleteScope
+            };
+
+            api('DELETE', '/v1/library/item', payload).then(function (result) {
+                if (result) {
+                    showToast('Removed successfully! Freed ' + ((result.freed_bytes || 0) / (1024*1024*1024)).toFixed(2) + ' GB', 'success');
+                    closeRequestModal();
+                    // Remove the delete button since item is gone
+                    var delBtn = document.querySelector('.cutdacord-delete-btn');
+                    if (delBtn) delBtn.parentNode.removeChild(delBtn);
+                } else {
+                    showToast('Failed to remove item.', 'error');
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = 'Remove from Library';
+                }
+            });
+        });
+
+        body.appendChild(deleteBtn);
+
+        // Cancel button
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'cutdacord-submit-btn';
+        cancelBtn.style.background = 'rgba(255,255,255,0.08)';
+        cancelBtn.style.marginTop = '0.5rem';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', closeRequestModal);
+        body.appendChild(cancelBtn);
+
+        modal.appendChild(body);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        overlay._keyHandler = function (e) {
+            if (e.key === 'Escape') closeRequestModal();
+        };
+        document.addEventListener('keydown', overlay._keyHandler);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  TMDB Search Modal                                                  */
+    /* ------------------------------------------------------------------ */
+
+    var _searchPage = 1;
+    var _searchQuery = '';
+    var _searchTotal = 0;
+
+    function injectSearchButton() {
+        // Find the header nav area
+        waitForElement('.headerRight, .skinHeader .headerButton').then(function (ref) {
+            if (!ref) return;
+            var container = ref.closest('.skinHeader') || ref.parentNode;
+            if (!container || container.querySelector('.cutdacord-search-btn')) return;
+
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cutdacord-search-btn headerButton headerButtonRight';
+
+            var icon = document.createElement('span');
+            icon.className = 'material-icons';
+            icon.textContent = 'library_add';
+            icon.style.fontSize = '24px';
+
+            btn.appendChild(icon);
+            btn.title = 'Search & Request Media';
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                openSearchModal();
+            });
+
+            // Insert before the last few buttons in headerRight
+            var headerRight = container.querySelector('.headerRight');
+            if (headerRight) {
+                headerRight.insertBefore(btn, headerRight.firstChild);
+            } else {
+                container.appendChild(btn);
+            }
+        });
+    }
+
+    function openSearchModal() {
+        closeSearchModal();
+        _searchPage = 1;
+        _searchQuery = '';
+        _searchTotal = 0;
+
+        var overlay = document.createElement('div');
+        overlay.className = 'cutdacord-search-overlay';
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeSearchModal();
+        });
+
+        var panel = document.createElement('div');
+        panel.className = 'cutdacord-search-panel';
+
+        // Header
+        var hdr = document.createElement('div');
+        hdr.className = 'cutdacord-search-header';
+
+        var title = document.createElement('h2');
+        title.textContent = 'Search & Request';
+        hdr.appendChild(title);
+
+        var closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'cutdacord-modal-close';
+        closeBtn.textContent = '\u00D7';
+        closeBtn.setAttribute('aria-label', 'Close');
+        closeBtn.addEventListener('click', closeSearchModal);
+        hdr.appendChild(closeBtn);
+
+        panel.appendChild(hdr);
+
+        // Search box
+        var searchBox = document.createElement('div');
+        searchBox.className = 'cutdacord-search-box';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'cutdacord-search-input';
+        input.placeholder = 'Search movies & TV shows...';
+        input.autocomplete = 'off';
+
+        var searchIcon = document.createElement('span');
+        searchIcon.className = 'material-icons cutdacord-search-icon';
+        searchIcon.textContent = 'search';
+
+        searchBox.appendChild(searchIcon);
+        searchBox.appendChild(input);
+        panel.appendChild(searchBox);
+
+        // Results grid
+        var grid = document.createElement('div');
+        grid.className = 'cutdacord-search-grid';
+        grid.id = 'cutdacord-search-grid';
+        panel.appendChild(grid);
+
+        // Navigation
+        var nav = document.createElement('div');
+        nav.className = 'cutdacord-search-nav';
+        nav.id = 'cutdacord-search-nav';
+        nav.style.display = 'none';
+
+        var prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.className = 'cutdacord-search-nav-btn';
+        prevBtn.textContent = 'Previous';
+        prevBtn.id = 'cutdacord-search-prev';
+        prevBtn.addEventListener('click', function () {
+            if (_searchPage > 1) {
+                _searchPage--;
+                performSearch(_searchQuery, _searchPage);
+            }
+        });
+
+        var pageInfo = document.createElement('span');
+        pageInfo.className = 'cutdacord-search-page-info';
+        pageInfo.id = 'cutdacord-search-page-info';
+
+        var nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.className = 'cutdacord-search-nav-btn';
+        nextBtn.textContent = 'Next';
+        nextBtn.id = 'cutdacord-search-next';
+        nextBtn.addEventListener('click', function () {
+            var totalPages = Math.ceil(_searchTotal / 20);
+            if (_searchPage < totalPages) {
+                _searchPage++;
+                performSearch(_searchQuery, _searchPage);
+            }
+        });
+
+        nav.appendChild(prevBtn);
+        nav.appendChild(pageInfo);
+        nav.appendChild(nextBtn);
+        panel.appendChild(nav);
+
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        // Focus input
+        setTimeout(function () { input.focus(); }, 100);
+
+        // Debounced search on input
+        var debounceTimer = null;
+        input.addEventListener('input', function () {
+            clearTimeout(debounceTimer);
+            var query = input.value.trim();
+            if (query.length < 2) {
+                grid.textContent = '';
+                nav.style.display = 'none';
+                return;
+            }
+            debounceTimer = setTimeout(function () {
+                _searchPage = 1;
+                _searchQuery = query;
+                performSearch(query, 1);
+            }, 400);
+        });
+
+        // Escape key
+        overlay._keyHandler = function (e) {
+            if (e.key === 'Escape') closeSearchModal();
+        };
+        document.addEventListener('keydown', overlay._keyHandler);
+    }
+
+    function closeSearchModal() {
+        var overlay = document.querySelector('.cutdacord-search-overlay');
+        if (overlay) {
+            if (overlay._keyHandler) {
+                document.removeEventListener('keydown', overlay._keyHandler);
+            }
+            overlay.parentNode.removeChild(overlay);
+        }
+    }
+
+    function performSearch(query, page) {
+        var grid = document.getElementById('cutdacord-search-grid');
+        var nav = document.getElementById('cutdacord-search-nav');
+        if (!grid) return;
+
+        grid.textContent = '';
+        var loading = document.createElement('div');
+        loading.className = 'cutdacord-search-loading';
+        loading.textContent = 'Searching...';
+        grid.appendChild(loading);
+
+        api('GET', '/v1/tmdb/search?query=' + encodeURIComponent(query) + '&page=' + page).then(function (data) {
+            grid.textContent = '';
+
+            if (!data || !data.results || data.results.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'cutdacord-search-empty';
+                empty.textContent = 'No results found.';
+                grid.appendChild(empty);
+                nav.style.display = 'none';
+                return;
+            }
+
+            _searchTotal = data.total_results || data.results.length;
+
+            for (var i = 0; i < data.results.length; i++) {
+                var card = buildSearchCard(data.results[i]);
+                grid.appendChild(card);
+            }
+
+            // Update nav
+            var totalPages = Math.ceil(_searchTotal / 20);
+            if (totalPages > 1) {
+                nav.style.display = 'flex';
+                var pageInfo = document.getElementById('cutdacord-search-page-info');
+                if (pageInfo) pageInfo.textContent = 'Page ' + page + ' of ' + totalPages;
+                var prevBtn = document.getElementById('cutdacord-search-prev');
+                var nextBtn = document.getElementById('cutdacord-search-next');
+                if (prevBtn) prevBtn.disabled = page <= 1;
+                if (nextBtn) nextBtn.disabled = page >= totalPages;
+            } else {
+                nav.style.display = 'none';
+            }
+        });
+    }
+
+    function buildSearchCard(result) {
+        var mediaType = result.media_type || (result.title ? 'movie' : 'tv');
+        var title = result.title || result.name || 'Unknown';
+        var year = (result.release_date || result.first_air_date || '').substring(0, 4);
+        var overview = result.overview || '';
+        var posterPath = result.poster_path || '';
+        var tmdbId = result.id;
+
+        var card = document.createElement('div');
+        card.className = 'cutdacord-search-card';
+        card.addEventListener('click', function () {
+            openTmdbRequestModal(tmdbId, mediaType, title, year, overview, posterPath);
+        });
+
+        // Poster
+        var posterDiv = document.createElement('div');
+        posterDiv.className = 'cutdacord-search-card-poster';
+        if (posterPath) {
+            var img = document.createElement('img');
+            img.src = TMDB_IMG + '/w185' + posterPath;
+            img.alt = '';
+            img.loading = 'lazy';
+            posterDiv.appendChild(img);
+        } else {
+            var noImg = document.createElement('span');
+            noImg.className = 'material-icons';
+            noImg.textContent = 'image';
+            noImg.style.fontSize = '48px';
+            noImg.style.color = 'rgba(255,255,255,0.2)';
+            posterDiv.appendChild(noImg);
+        }
+        card.appendChild(posterDiv);
+
+        // Badge
+        var badge = document.createElement('span');
+        badge.className = 'cutdacord-search-card-badge';
+        badge.textContent = mediaType === 'movie' ? 'Movie' : 'TV';
+        card.appendChild(badge);
+
+        // Info
+        var info = document.createElement('div');
+        info.className = 'cutdacord-search-card-info';
+
+        var titleEl = document.createElement('div');
+        titleEl.className = 'cutdacord-search-card-title';
+        titleEl.textContent = title;
+        info.appendChild(titleEl);
+
+        if (year) {
+            var yearEl = document.createElement('div');
+            yearEl.className = 'cutdacord-search-card-year';
+            yearEl.textContent = year;
+            info.appendChild(yearEl);
+        }
+
+        card.appendChild(info);
+        return card;
+    }
+
+    function openTmdbRequestModal(tmdbId, mediaType, title, year, overview, posterPath) {
+        closeSearchModal();
+
+        var fakeItem = {
+            Name: title,
+            ProductionYear: year || null,
+            Overview: overview || null,
+            Id: null,
+            _tmdbPoster: posterPath || null
+        };
+
+        openRequestModal(fakeItem, String(tmdbId), mediaType);
+    }
+
+    /* ------------------------------------------------------------------ */
     /*  Initialisation                                                     */
     /* ------------------------------------------------------------------ */
 
@@ -667,6 +1173,22 @@
                 console.warn('[CutDaCord] Auth deferred — will retry on first API call.');
             }
         });
+
+        // Inject search button in header
+        injectSearchButton();
+
+        // Re-inject search button on SPA navigation (header may re-render)
+        var _navDebounce = null;
+        function onNavForSearch() {
+            clearTimeout(_navDebounce);
+            _navDebounce = setTimeout(function () {
+                if (!document.querySelector('.cutdacord-search-btn')) {
+                    injectSearchButton();
+                }
+            }, 500);
+        }
+        window.addEventListener('hashchange', onNavForSearch);
+        window.addEventListener('popstate', onNavForSearch);
 
         // Check if we're already on a detail page
         onRouteChange();

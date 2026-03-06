@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo, getTVSeasons, getTVSeasonDetail } from '@/api/media';
+import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo, getTVSeasons, getTVSeasonDetail, deleteLibraryItem } from '@/api/media';
+import type { DeleteMediaRequest } from '@/api/media';
 
 export function useTMDBSearch(query: string, page = 1) {
   return useQuery({
@@ -92,6 +93,17 @@ export function useDeleteJellyfinItem() {
     mutationFn: (id: string) => deleteJellyfinItem(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['library'] });
+    },
+  });
+}
+
+export function useDeleteLibraryItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: DeleteMediaRequest) => deleteLibraryItem(req),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['library'] });
+      qc.invalidateQueries({ queryKey: ['storage-info'] });
     },
   });
 }

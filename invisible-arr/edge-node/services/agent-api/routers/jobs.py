@@ -85,7 +85,10 @@ async def list_jobs(
     """Return a paginated list of jobs, optionally filtered by status."""
 
     async with get_session_factory()() as session:
+        from sqlalchemy.orm import selectinload
+
         stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
+        stmt = stmt.options(selectinload(Job.events))
 
         if status is not None:
             stmt = stmt.where(Job.state == status)
@@ -97,6 +100,14 @@ async def list_jobs(
 
         result = await session.execute(stmt)
         jobs: list[Job] = list(result.scalars().all())
+
+    def _last_error(j: Job) -> str | None:
+        if j.state != JobState.FAILED or not j.events:
+            return None
+        failed_events = [e for e in j.events if e.state == JobState.FAILED.value]
+        if failed_events:
+            return max(failed_events, key=lambda e: e.created_at).message
+        return None
 
     return [
         JobListResponse(
@@ -116,6 +127,7 @@ async def list_jobs(
             acquisition_method=j.acquisition_method,
             streaming_urls=j.streaming_urls,
             retry_count=j.retry_count,
+            last_error=_last_error(j),
             created_at=j.created_at,
             updated_at=j.updated_at,
         )
