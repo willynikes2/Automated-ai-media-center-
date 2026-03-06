@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+        <Version>1.0.0.0</Version>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Jellyfin.Common" Version="10.11.6" />
+        <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
+        <PackageReference Include="Jellyfin.Controller" Version="10.11.6" />
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Configuration\config.html" />
+        <None Remove="Inject\cutdacord.js" />
+        <EmbeddedResource Include="Inject\cutdacord.js" />
+        <None Remove="Inject\cutdacord.css" />
+        <EmbeddedResource Include="Inject\cutdacord.css" />
+    </ItemGroup>
+</Project>

@@ -1,0 +1,343 @@
+/* ==========================================================================
+   CutDaCord — Injected Styles for Jellyfin Web UI
+   All classes prefixed with `cutdacord-` to avoid collisions.
+   ========================================================================== */
+
+/* -- Request Button -------------------------------------------------------- */
+
+.cutdacord-request-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.1rem;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+  line-height: 1;
+  font-family: inherit;
+  margin-left: 0.5rem;
+}
+
+.cutdacord-request-btn:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.45);
+}
+
+.cutdacord-request-btn:active {
+  transform: translateY(0);
+}
+
+.cutdacord-btn-icon {
+  font-size: 1.1rem;
+}
+
+/* -- Toast ----------------------------------------------------------------- */
+
+.cutdacord-toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 500;
+  z-index: 100000;
+  transform: translateY(100%);
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: 360px;
+}
+
+.cutdacord-toast--visible {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.cutdacord-toast--success { background: #059669; }
+.cutdacord-toast--error   { background: #dc2626; }
+.cutdacord-toast--warn    { background: #d97706; }
+.cutdacord-toast--info    { background: #2563eb; }
+
+/* -- Modal Overlay --------------------------------------------------------- */
+
+.cutdacord-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* -- Modal ----------------------------------------------------------------- */
+
+.cutdacord-modal {
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  width: min(90vw, 480px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* -- Modal Header ---------------------------------------------------------- */
+
+.cutdacord-modal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+}
+
+.cutdacord-modal-poster {
+  flex-shrink: 0;
+  width: 100px;
+}
+
+.cutdacord-poster-img {
+  width: 100%;
+  border-radius: 0.5rem;
+  object-fit: cover;
+}
+
+.cutdacord-modal-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.cutdacord-modal-title h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 0 0 0.25rem 0;
+  line-height: 1.3;
+}
+
+.cutdacord-modal-year {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.85rem;
+  margin-left: 0.35rem;
+}
+
+.cutdacord-modal-overview {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0.5rem 0 0 0;
+}
+
+.cutdacord-modal-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.cutdacord-modal-close:hover {
+  color: #fff;
+}
+
+/* -- Modal Body ------------------------------------------------------------ */
+
+.cutdacord-modal-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.cutdacord-modal-body::-webkit-scrollbar { width: 4px; }
+.cutdacord-modal-body::-webkit-scrollbar-track { background: transparent; }
+.cutdacord-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+/* -- Acquisition Mode Group ------------------------------------------------ */
+
+.cutdacord-mode-group {
+  margin-bottom: 1.25rem;
+}
+
+.cutdacord-mode-legend {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.cutdacord-mode-radios {
+  display: flex;
+  gap: 1rem;
+}
+
+.cutdacord-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.cutdacord-radio {
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+/* -- Seasons Container ----------------------------------------------------- */
+
+.cutdacord-seasons-container {
+  margin-bottom: 1rem;
+}
+
+.cutdacord-section-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.cutdacord-loading,
+.cutdacord-no-seasons {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* -- Checkbox Labels ------------------------------------------------------- */
+
+.cutdacord-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+
+.cutdacord-checkbox-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cutdacord-checkbox-all {
+  font-weight: 600;
+  color: #e2e8f0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 0.6rem;
+  margin-bottom: 0.25rem;
+}
+
+.cutdacord-checkbox {
+  accent-color: #6366f1;
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+/* -- Season List ----------------------------------------------------------- */
+
+.cutdacord-season-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.cutdacord-season-list::-webkit-scrollbar { width: 4px; }
+.cutdacord-season-list::-webkit-scrollbar-track { background: transparent; }
+.cutdacord-season-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+/* -- Submit Button --------------------------------------------------------- */
+
+.cutdacord-submit-btn {
+  display: block;
+  width: 100%;
+  padding: 0.7rem 1.5rem;
+  margin-top: 1rem;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+  font-family: inherit;
+}
+
+.cutdacord-submit-btn:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.cutdacord-submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* -- Mobile ---------------------------------------------------------------- */
+
+@media (max-width: 600px) {
+  .cutdacord-modal {
+    width: 95vw;
+    max-height: 90vh;
+  }
+
+  .cutdacord-modal-header {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .cutdacord-modal-poster {
+    width: 80px;
+  }
+
+  .cutdacord-request-btn {
+    padding: 0.45rem 0.75rem;
+    font-size: 0.8rem;
+  }
+
+  .cutdacord-toast {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+  }
+}
