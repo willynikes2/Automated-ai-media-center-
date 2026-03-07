@@ -15,15 +15,14 @@ export function AllJobs() {
           onChange={(e) => setStateFilter(e.target.value)}
           options={[
             { value: '', label: 'All States' },
-            { value: 'CREATED', label: 'Created' },
-            { value: 'RESOLVING', label: 'Resolving' },
+            { value: 'REQUESTED', label: 'Requested' },
             { value: 'SEARCHING', label: 'Searching' },
-            { value: 'SELECTED', label: 'Selected' },
-            { value: 'ACQUIRING', label: 'Acquiring' },
+            { value: 'DOWNLOADING', label: 'Downloading' },
             { value: 'IMPORTING', label: 'Importing' },
-            { value: 'VERIFYING', label: 'Verifying' },
-            { value: 'DONE', label: 'Done' },
+            { value: 'AVAILABLE', label: 'Available' },
+            { value: 'WAITING', label: 'Waiting' },
             { value: 'FAILED', label: 'Failed' },
+            { value: 'DELETED', label: 'Deleted' },
           ]}
         />
       </div>

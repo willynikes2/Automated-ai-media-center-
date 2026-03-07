@@ -1,10 +1,12 @@
+import { useState } from 'react';
 import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { JobTimeline } from './JobTimeline';
+import { ChooseReleaseModal } from './ChooseReleaseModal';
 import { useRetryJob, useJobProgress } from '@/hooks/useJobs';
 import { toast } from '@/components/ui/Toast';
-import { RefreshCw, Cloud, HardDrive } from 'lucide-react';
+import { RefreshCw, Cloud, HardDrive, List } from 'lucide-react';
 import type { JobDetail as JobDetailType } from '@/api/jobs';
 
 const FRIENDLY_ERRORS: Record<string, string> = {
@@ -41,7 +43,8 @@ function AcquisitionInfo({ mode, method }: { mode: string; method?: string | nul
 
 export function JobDetailView({ job }: { job: JobDetailType }) {
   const retryMutation = useRetryJob();
-  const isDownloading = ['ACQUIRING', 'IMPORTING'].includes(job.state);
+  const isDownloading = ['DOWNLOADING', 'IMPORTING'].includes(job.state);
+  const [showReleaseModal, setShowReleaseModal] = useState(false);
   const { data: progressData } = useJobProgress(job.id, isDownloading);
   const progress = progressData?.percent ?? -1;
 
@@ -116,15 +119,27 @@ export function JobDetailView({ job }: { job: JobDetailType }) {
                 </p>
               )}
             </div>
-            <Button
-              variant="secondary"
-              onClick={handleRetry}
-              loading={retryMutation.isPending}
-            >
-              <RefreshCw className="h-4 w-4" /> Retry
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setShowReleaseModal(true)}
+              >
+                <List className="h-4 w-4" /> Choose Release
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleRetry}
+                loading={retryMutation.isPending}
+              >
+                <RefreshCw className="h-4 w-4" /> Retry
+              </Button>
+            </div>
           </div>
         </Card>
+      )}
+
+      {showReleaseModal && (
+        <ChooseReleaseModal jobId={job.id} onClose={() => setShowReleaseModal(false)} />
       )}
     </div>
   );

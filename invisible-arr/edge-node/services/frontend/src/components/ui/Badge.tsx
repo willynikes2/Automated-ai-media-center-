@@ -1,45 +1,28 @@
 import type { JobState } from '@/api/jobs';
 
 const STATE_LABELS: Record<string, string> = {
-  CREATED: 'Queued',
-  SEARCHING: 'Looking for best version',
+  REQUESTED: 'Requested',
+  SEARCHING: 'Searching',
   DOWNLOADING: 'Downloading',
-  IMPORTING: 'Organizing files',
-  VERIFYING: 'Checking quality',
-  DONE: 'Ready to watch!',
-  MONITORED: 'Waiting for Release',
-  INVESTIGATING: 'Working on it',
-  UNAVAILABLE: 'Not available',
-  FAILED: 'Working on it',       // Map FAILED to friendly text (diagnostic engine handles it)
+  IMPORTING: 'Importing',
+  AVAILABLE: 'Available',
+  WAITING: 'Waiting for Release',
+  FAILED: 'Failed',
   DELETED: 'Removed',
-  // Legacy states
-  RESOLVING: 'Looking for best version',
-  ADDING: 'Looking for best version',
-  SELECTED: 'Found a version',
-  ACQUIRING: 'Downloading',
 };
 
 const stateColors: Record<string, string> = {
-  CREATED: 'bg-text-tertiary/20 text-text-secondary',
-  SEARCHING: 'bg-blue-500/20 text-blue-400',
-  DOWNLOADING: 'bg-orange-500/20 text-orange-400',
-  IMPORTING: 'bg-orange-500/20 text-orange-400',
-  VERIFYING: 'bg-orange-500/20 text-orange-400',
-  DONE: 'bg-status-available/20 text-status-available',
-  MONITORED: 'bg-amber-500/20 text-amber-400',
-  INVESTIGATING: 'bg-yellow-500/20 text-yellow-400',
-  UNAVAILABLE: 'bg-red-500/20 text-red-400',
-  FAILED: 'bg-yellow-500/20 text-yellow-400',
+  REQUESTED: 'bg-blue-500/20 text-blue-400',
+  SEARCHING: 'bg-yellow-500/20 text-yellow-400',
+  DOWNLOADING: 'bg-purple-500/20 text-purple-400',
+  IMPORTING: 'bg-indigo-500/20 text-indigo-400',
+  AVAILABLE: 'bg-status-available/20 text-status-available',
+  WAITING: 'bg-amber-500/20 text-amber-400',
+  FAILED: 'bg-red-500/20 text-red-400',
   DELETED: 'bg-text-tertiary/20 text-text-tertiary',
-  // Legacy
-  RESOLVING: 'bg-blue-500/20 text-blue-400',
-  ADDING: 'bg-blue-500/20 text-blue-400',
-  SELECTED: 'bg-yellow-500/20 text-yellow-400',
-  ACQUIRING: 'bg-orange-500/20 text-orange-400',
 };
 
-const ACTIVE_STATES = ['SEARCHING', 'DOWNLOADING', 'IMPORTING', 'VERIFYING', 'INVESTIGATING',
-                       'RESOLVING', 'ADDING', 'ACQUIRING'];
+const ACTIVE_STATES = ['REQUESTED', 'SEARCHING', 'DOWNLOADING', 'IMPORTING'];
 
 export function Badge({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (

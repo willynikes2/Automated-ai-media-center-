@@ -11,7 +11,7 @@ function ModeBadge({ mode, method }: { mode: string; method?: string | null }) {
 }
 
 export function JobCard({ job }: { job: Job }) {
-  const isActive = !['DONE', 'FAILED'].includes(job.state);
+  const isActive = !['AVAILABLE', 'FAILED', 'WAITING', 'DELETED'].includes(job.state);
 
   return (
     <Link to={`/requests/${job.id}`} className="block">

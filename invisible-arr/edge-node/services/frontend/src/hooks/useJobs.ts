@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getJobs, getJob, getJobProgress, createRequest, createBatchRequest, retryJob, cancelJob, type Job } from '@/api/jobs';
+import { getJobs, getJob, getJobProgress, createRequest, createBatchRequest, retryJob, cancelJob, getReleases, grabRelease, type Job } from '@/api/jobs';
 
 export function useJobs(params: { status?: string; limit?: number } = {}) {
   return useQuery({
@@ -73,8 +73,8 @@ export function useCancelJob() {
   });
 }
 
-const TERMINAL: string[] = ['DONE', 'FAILED', 'DELETED', 'UNAVAILABLE'];
-const NON_ACTIVE: string[] = ['DONE', 'FAILED', 'MONITORED', 'DELETED', 'UNAVAILABLE'];
+const TERMINAL: string[] = ['AVAILABLE', 'FAILED', 'DELETED'];
+const NON_ACTIVE: string[] = ['AVAILABLE', 'FAILED', 'WAITING', 'DELETED'];
 export function filterActive(jobs: Job[] | undefined) {
   return jobs?.filter((j) => !NON_ACTIVE.includes(j.state)) ?? [];
 }
@@ -82,8 +82,28 @@ export function filterCompleted(jobs: Job[] | undefined) {
   return jobs?.filter((j) => TERMINAL.includes(j.state)) ?? [];
 }
 export function filterMonitored(jobs: Job[] | undefined) {
-  return jobs?.filter((j) => j.state === 'MONITORED') ?? [];
+  return jobs?.filter((j) => j.state === 'WAITING') ?? [];
 }
 export function filterIssues(jobs: Job[] | undefined) {
-  return jobs?.filter((j) => ['INVESTIGATING', 'UNAVAILABLE', 'FAILED'].includes(j.state)) ?? [];
+  return jobs?.filter((j) => j.state === 'FAILED') ?? [];
+}
+
+export function useReleases(jobId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['releases', jobId],
+    queryFn: () => getReleases(jobId),
+    enabled,
+    staleTime: 30000,
+  });
+}
+
+export function useGrabRelease() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ jobId, guid, indexerId }: { jobId: string; guid: string; indexerId: number }) =>
+      grabRelease(jobId, guid, indexerId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
 }

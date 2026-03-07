@@ -1,8 +1,8 @@
 import { agentApi } from './client';
 
 export type JobState =
-  | 'CREATED' | 'RESOLVING' | 'ADDING' | 'SEARCHING' | 'SELECTED'
-  | 'ACQUIRING' | 'IMPORTING' | 'VERIFYING' | 'MONITORED' | 'DONE' | 'FAILED' | 'DELETED';
+  | 'REQUESTED' | 'SEARCHING' | 'DOWNLOADING' | 'IMPORTING' | 'AVAILABLE'
+  | 'WAITING' | 'FAILED' | 'DELETED';
 
 export interface SelectedCandidate {
   title?: string;
@@ -106,4 +106,30 @@ export async function createBatchRequest(body: {
 }): Promise<Job[]> {
   const res = await agentApi.post('/v1/request/batch', { ...body, media_type: 'tv' });
   return res.data;
+}
+
+export interface Release {
+  guid: string;
+  title: string;
+  quality: string;
+  size: number;
+  sizeDisplay: string;
+  protocol: string;
+  seeders: number | null;
+  leechers: number | null;
+  indexer: string;
+  indexerId: number;
+  score: number;
+  recommended: boolean;
+  rejected: boolean;
+  rejections: string[];
+}
+
+export async function getReleases(jobId: string): Promise<Release[]> {
+  const res = await agentApi.get(`/v1/jobs/${jobId}/releases`);
+  return res.data;
+}
+
+export async function grabRelease(jobId: string, guid: string, indexerId: number): Promise<void> {
+  await agentApi.post(`/v1/jobs/${jobId}/grab`, { guid, indexerId });
 }

@@ -2,7 +2,7 @@ import { Check, Circle, X } from 'lucide-react';
 import { getStateLabel } from '@/components/ui/Badge';
 import type { JobState, JobEvent } from '@/api/jobs';
 
-const PIPELINE: JobState[] = ['CREATED', 'RESOLVING', 'ADDING', 'ACQUIRING', 'IMPORTING', 'VERIFYING', 'DONE'];
+const PIPELINE: JobState[] = ['REQUESTED', 'SEARCHING', 'DOWNLOADING', 'IMPORTING', 'AVAILABLE'];
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
@@ -43,9 +43,9 @@ export function JobTimeline({
   progressData?: { speed_bytes: number; size_total: number; size_downloaded: number; time_remaining: string };
 }) {
   const isFailed = currentState === 'FAILED';
-  const isMonitored = currentState === 'MONITORED';
+  const isMonitored = currentState === 'WAITING';
   const currentIdx = (isFailed || isMonitored) ? -1 : stateIndex(currentState);
-  const showProgress = progress != null && progress >= 0 && ['ACQUIRING', 'IMPORTING'].includes(currentState);
+  const showProgress = progress != null && progress >= 0 && ['DOWNLOADING', 'IMPORTING'].includes(currentState);
 
   return (
     <div className="space-y-6">

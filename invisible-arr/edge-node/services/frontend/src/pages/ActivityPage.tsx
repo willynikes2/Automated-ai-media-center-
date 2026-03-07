@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useJobs, filterActive, filterCompleted, filterMonitored, filterIssues, useRetryJob, useCancelJob, useJobProgress } from '@/hooks/useJobs';
 import { JobTimeline } from '@/components/jobs/JobTimeline';
+import { ChooseReleaseModal } from '@/components/jobs/ChooseReleaseModal';
 import { StateBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -38,9 +39,19 @@ function AcquisitionBadge({ mode, method }: { mode: string; method?: string | nu
   );
 }
 
+function SourceBadge({ source }: { source: string }) {
+  const config: Record<string, { bg: string; label: string }> = {
+    RD: { bg: 'bg-emerald-500/20 text-emerald-400', label: 'RD' },
+    Usenet: { bg: 'bg-blue-500/20 text-blue-400', label: 'Usenet' },
+    Torrent: { bg: 'bg-orange-500/20 text-orange-400', label: 'Torrent' },
+  };
+  const c = config[source] ?? config.Torrent;
+  return <Badge className={c.bg}>{c.label}</Badge>;
+}
+
 function ActiveJobCard({ job }: { job: Job }) {
   const cancelMutation = useCancelJob();
-  const isDownloading = ['DOWNLOADING', 'IMPORTING', 'ACQUIRING'].includes(job.state);
+  const isDownloading = ['DOWNLOADING', 'IMPORTING'].includes(job.state);
   const { data: progressData } = useJobProgress(job.id, isDownloading);
   const progress = progressData?.percent ?? -1;
 
@@ -119,8 +130,9 @@ function friendlyError(raw: string | null): string | null {
 }
 
 function CompletedRow({ job }: { job: Job }) {
-  const isIssue = ['FAILED', 'INVESTIGATING', 'UNAVAILABLE'].includes(job.state);
+  const isIssue = job.state === 'FAILED';
   const retryMutation = useRetryJob();
+  const [showReleaseModal, setShowReleaseModal] = useState(false);
 
   const handleRetry = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -157,16 +169,25 @@ function CompletedRow({ job }: { job: Job }) {
         <span className="text-xs text-text-tertiary shrink-0">{job.selected_candidate.resolution}p</span>
       )}
       {isIssue ? (
-        <button
-          onClick={handleRetry}
-          className="shrink-0 text-xs px-2 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
-        >
-          Retry
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={(e) => { e.preventDefault(); setShowReleaseModal(true); }}
+            className="shrink-0 text-xs px-2 py-1 rounded bg-gray-500/10 text-gray-400 hover:bg-gray-500/20 transition-colors"
+          >
+            Choose Release
+          </button>
+          <button
+            onClick={handleRetry}
+            className="shrink-0 text-xs px-2 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
       ) : job.imported_path ? (
         <span className="text-xs text-status-available shrink-0">Imported</span>
       ) : null}
       <StateBadge state={job.state} />
+      {showReleaseModal && <ChooseReleaseModal jobId={job.id} onClose={() => setShowReleaseModal(false)} />}
     </Link>
   );
 }
@@ -181,7 +202,7 @@ export function ActivityPage() {
   const completed = filterCompleted(jobs);
   const monitored = filterMonitored(jobs);
   const issues = filterIssues(jobs);
-  const done = (jobs ?? []).filter((j) => j.state === 'DONE');
+  const done = (jobs ?? []).filter((j) => j.state === 'AVAILABLE');
 
   const counts: Record<Filter, number> = {
     all: (jobs ?? []).length,
