@@ -189,7 +189,7 @@ async def receive_rdt_complete(
             result = await session.execute(
                 select(Job)
                 .where(Job.rd_torrent_id == info_hash)
-                .where(Job.state.in_([JobState.ACQUIRING.value, JobState.IMPORTING.value]))
+                .where(Job.state.in_([JobState.DOWNLOADING.value, JobState.IMPORTING.value]))
                 .order_by(Job.updated_at.desc())
                 .limit(1)
             )
@@ -234,7 +234,7 @@ async def receive_rdt_complete(
 # ---------------------------------------------------------------------------
 
 # Terminal states — webhooks should not match jobs in these states.
-_TERMINAL_STATES = {JobState.DONE.value, JobState.DELETED.value, JobState.UNAVAILABLE.value}
+_TERMINAL_STATES = {JobState.AVAILABLE.value, JobState.DELETED.value}
 
 
 def _limit_payload(payload: dict[str, Any], max_size: int = 50_000) -> dict[str, Any]:
@@ -319,6 +319,17 @@ async def _match_webhook_to_job(
     return result.scalar_one_or_none()
 
 
+def _extract_source_badge(payload: dict[str, Any]) -> str:
+    """Extract download source from Arr webhook payload."""
+    client = (payload.get("downloadClient") or "").lower()
+    if "rdt" in client or "debrid" in client:
+        return "RD"
+    elif "sab" in client or "nzb" in client or "usenet" in client:
+        return "Usenet"
+    else:
+        return "Torrent"
+
+
 async def _process_arr_webhook(
     payload: dict[str, Any],
     source: str,
@@ -355,14 +366,14 @@ async def _process_arr_webhook(
         # ── State transitions based on eventType ──
 
         if event_type == "Grab":
+            source_badge = _extract_source_badge(payload)
             if job.state in (
+                JobState.REQUESTED.value,
                 JobState.SEARCHING.value,
-                JobState.CREATED.value,
-                JobState.RESOLVING.value,
-                JobState.ADDING.value,
+                JobState.FAILED.value,  # retry grabs
             ):
                 job.state = JobState.DOWNLOADING.value
-                logger.info("Job %s → DOWNLOADING via %s Grab", job.id, source)
+                logger.info("Job %s → DOWNLOADING via %s Grab (%s)", job.id, source, source_badge)
 
             release = payload.get("release", {})
             if release:
@@ -371,8 +382,13 @@ async def _process_arr_webhook(
                     "indexer": release.get("indexer"),
                     "quality": _safe_quality_name(release.get("quality")),
                     "size": release.get("size"),
+                    "source": source_badge,
                     "full_payload": payload,
                 })
+            # Capture download ID for correlation
+            download_id = payload.get("downloadId") or (release.get("downloadId") if release else None)
+            if download_id and not job.rd_torrent_id:
+                job.rd_torrent_id = str(download_id)
             # Capture queue ID if the release carries one.
             queue_id = release.get("downloadId") or release.get("id")
             if queue_id is not None:
@@ -381,7 +397,6 @@ async def _process_arr_webhook(
         elif event_type in ("Download", "DownloadFolderImported"):
             if job.state in (
                 JobState.DOWNLOADING.value,
-                JobState.ACQUIRING.value,
                 JobState.IMPORTING.value,
                 JobState.SEARCHING.value,
             ):
@@ -397,15 +412,24 @@ async def _process_arr_webhook(
             await set_rdt_ready(str(job.id), payload="webhook_import")
 
         elif event_type == "DownloadFailed":
-            if job.state in (
-                JobState.DOWNLOADING.value,
-                JobState.ACQUIRING.value,
-            ):
-                job.state = JobState.INVESTIGATING.value
-                logger.info("Job %s → INVESTIGATING via %s DownloadFailed", job.id, source)
+            source_badge = _extract_source_badge(payload)
+            failure_msg = payload.get("message") or "unknown reason"
+            event.message = f"Download failed ({source_badge}): {failure_msg}"
+            event.metadata_json = _limit_payload({
+                "failed_source": source_badge.lower(),
+                "failure_message": failure_msg,
+                "full_payload": payload,
+            })
 
-            failure_msg = payload.get("message", "unknown reason")
-            event.message = f"Download failed: {failure_msg}"
+            if job.state in (JobState.DOWNLOADING.value, JobState.SEARCHING.value):
+                # Radarr/Sonarr will automatically try the next download client
+                # by priority (rdt-client → SABnzbd → qBittorrent).
+                # Set back to SEARCHING so the timeout checker can catch truly stuck jobs.
+                job.state = JobState.SEARCHING.value
+                logger.info(
+                    "Job %s: %s download failed (%s), Radarr/Sonarr will try next client",
+                    job.id, source_badge, failure_msg[:100],
+                )
 
         elif event_type == "Health":
             logger.warning(
