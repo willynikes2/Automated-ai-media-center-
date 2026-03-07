@@ -617,3 +617,450 @@
     gap: 0.75rem;
   }
 }
+
+/* ==========================================================================
+   Netflix-Style Skin — Visual overrides for stock Jellyfin DOM
+   ========================================================================== */
+
+/* -- Dark Background ------------------------------------------------------ */
+
+.backgroundContainer {
+  background-color: #141414 !important;
+}
+
+/* -- Section Titles ------------------------------------------------------- */
+
+h2.sectionTitle,
+.sectionTitle-cards {
+  font-size: clamp(1rem, 2vw, 1.5rem) !important;
+  font-weight: 700 !important;
+  color: #fff !important;
+  padding-left: 4% !important;
+  margin-bottom: 0.25rem !important;
+}
+
+/* -- Card Styling --------------------------------------------------------- */
+
+.card {
+  contain: layout style;
+}
+
+.card .cardImageContainer {
+  border-radius: 4px;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  opacity: 0.9;
+}
+
+.card:hover .cardImageContainer {
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.cardBox {
+  margin: 0 2px;
+}
+
+/* -- Progress Bars -------------------------------------------------------- */
+
+.itemProgressBar {
+  height: 3px !important;
+}
+
+.itemProgressBarForeground {
+  background: #a95bc2 !important;
+}
+
+/* -- Hidden Scrollbars on Horizontal Rows --------------------------------- */
+
+.scrollSlider {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollSlider::-webkit-scrollbar {
+  display: none;
+}
+
+/* -- Header --------------------------------------------------------------- */
+
+.skinHeader {
+  background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%) !important;
+}
+
+/* -- Drawer / Sidebar ----------------------------------------------------- */
+
+.mainDrawer,
+.drawer-open .mainDrawer {
+  background: rgba(20, 20, 20, 0.95) !important;
+}
+
+/* -- Login Page ----------------------------------------------------------- */
+
+.loginPage,
+#loginPage {
+  background-color: #141414 !important;
+}
+
+/* -- Library Tiles -------------------------------------------------------- */
+
+.section0 .card.backdropCard .cardImageContainer,
+.libraryPage .card .cardImageContainer {
+  background: linear-gradient(135deg, #1a1a2e, #16213e) !important;
+}
+
+/* -- Mobile Breakpoint ---------------------------------------------------- */
+
+@media (max-width: 600px) {
+  h2.sectionTitle,
+  .sectionTitle-cards {
+    font-size: clamp(0.85rem, 3vw, 1.1rem) !important;
+    padding-left: 3% !important;
+  }
+
+  .card:hover .cardImageContainer {
+    transform: none;
+  }
+}
+
+/* -- Low-Power Devices ---------------------------------------------------- */
+
+.cutdacord-lowpower .card:hover .cardImageContainer {
+  transform: none;
+  opacity: 1;
+}
+
+/* ==========================================================================
+   Hero Banner
+   ========================================================================== */
+
+.cutdacord-hero {
+  position: relative;
+  height: 56.25vw;
+  max-height: 75vh;
+  min-height: 280px;
+  contain: layout style paint;
+  overflow: hidden;
+  margin-bottom: -2rem;
+}
+
+.cutdacord-hero-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+
+.cutdacord-hero-gradient {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to top, #141414 0%, rgba(20,20,20,0.8) 15%, transparent 40%),
+    linear-gradient(to right, rgba(20,20,20,0.9) 0%, transparent 50%);
+}
+
+.cutdacord-hero-content {
+  position: absolute;
+  bottom: 18%;
+  left: 4%;
+  max-width: 40%;
+  z-index: 1;
+}
+
+.cutdacord-hero-title {
+  font-size: clamp(1.5rem, 4vw, 3rem);
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.5rem 0;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  line-height: 1.1;
+}
+
+.cutdacord-hero-meta {
+  color: #aaa;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.cutdacord-hero-overview {
+  color: #ccc;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.cutdacord-hero-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.cutdacord-hero-btn {
+  border: none;
+  border-radius: 4px;
+  padding: 0.6rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.cutdacord-hero-btn:hover {
+  opacity: 0.85;
+}
+
+.cutdacord-hero-btn--play {
+  background: #fff;
+  color: #141414;
+}
+
+.cutdacord-hero-btn--info {
+  background: rgba(109, 109, 110, 0.7);
+  color: #fff;
+}
+
+@media (max-width: 600px) {
+  .cutdacord-hero {
+    max-height: 50vh;
+  }
+
+  .cutdacord-hero-content {
+    max-width: 80%;
+    bottom: 12%;
+  }
+
+  .cutdacord-hero-overview {
+    -webkit-line-clamp: 2;
+  }
+
+  .cutdacord-hero-btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+  }
+}
+
+.cutdacord-lowpower .cutdacord-hero {
+  max-height: 40vh;
+}
+
+/* ==========================================================================
+   Recommendation Rows
+   ========================================================================== */
+
+.cutdacord-rec-section {
+  padding: 0.5rem 0;
+}
+
+.cutdacord-rec-title {
+  font-size: clamp(1rem, 2vw, 1.3rem);
+  font-weight: 700;
+  color: #fff;
+  padding-left: 4%;
+  margin: 0 0 0.5rem 0;
+}
+
+.cutdacord-rec-reason {
+  color: #a95bc2;
+  font-weight: 400;
+}
+
+.cutdacord-rec-scroller {
+  display: flex;
+  flex-direction: row;
+  overflow-x: auto;
+  gap: 0.5rem;
+  padding: 0 4%;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.cutdacord-rec-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.cutdacord-rec-card {
+  flex: 0 0 150px;
+  text-decoration: none;
+  color: #fff;
+  transition: opacity 0.2s ease;
+}
+
+.cutdacord-rec-card:hover {
+  opacity: 0.8;
+}
+
+.cutdacord-rec-card-img {
+  width: 100%;
+  aspect-ratio: 2/3;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #2a2a2a;
+  display: block;
+}
+
+.cutdacord-rec-card-title {
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 600px) {
+  .cutdacord-rec-card {
+    flex: 0 0 120px;
+  }
+
+  .cutdacord-rec-scroller {
+    padding: 0 3%;
+    gap: 0.4rem;
+  }
+}
+
+/* ==========================================================================
+   Episode Drilling (Search Panel)
+   ========================================================================== */
+
+.cutdacord-tv-expand {
+  grid-column: 1 / -1;
+  background: rgba(0,0,0,0.4);
+  border-radius: 8px;
+  margin: 4px 0 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.cutdacord-season-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: rgba(255,255,255,0.85);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  transition: background 0.15s;
+}
+
+.cutdacord-season-header:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.cutdacord-season-arrow {
+  font-size: 10px;
+  color: rgba(255,255,255,0.4);
+  width: 14px;
+  text-align: center;
+}
+
+.cutdacord-episode-list {
+  padding: 0 8px;
+}
+
+.cutdacord-episode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 13px;
+}
+
+.cutdacord-episode-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cutdacord-episode-num {
+  color: rgba(255,255,255,0.4);
+  font-family: monospace;
+  font-size: 12px;
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.cutdacord-episode-title {
+  color: rgba(255,255,255,0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cutdacord-episode-request-btn {
+  background: rgba(130,80,230,0.2);
+  color: #a78bfa;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.cutdacord-episode-request-btn:hover {
+  background: rgba(130,80,230,0.35);
+}
+
+.cutdacord-episode-request-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ==========================================================================
+   Detail Page TV Form (Season/Episode Dropdown)
+   ========================================================================== */
+
+.cutdacord-tv-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cutdacord-select {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(0,0,0,0.3);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+
+.cutdacord-select:focus {
+  border-color: #a78bfa;
+}
+
+.cutdacord-radio-group {
+  display: flex;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.cutdacord-episode-section {
+  transition: all 0.2s;
+}
+
+/* -- Mobile adjustments for episode drilling ------------------------------ */
+
+@media (max-width: 600px) {
+  .cutdacord-season-header {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .cutdacord-episode-row {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}

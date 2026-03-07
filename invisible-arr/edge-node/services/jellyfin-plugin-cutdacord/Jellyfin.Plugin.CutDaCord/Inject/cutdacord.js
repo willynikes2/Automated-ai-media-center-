@@ -5,6 +5,13 @@
     if (window.__cutdacord_loaded) return;
     window.__cutdacord_loaded = true;
 
+    // Low-power device detection
+    (function detectLowPower() {
+        if (/WebOS|webOS|LG Browser|iPhone OS 1[0-5]/i.test(navigator.userAgent)) {
+            document.body.classList.add('cutdacord-lowpower');
+        }
+    })();
+
     /* ------------------------------------------------------------------ */
     /*  Constants                                                          */
     /* ------------------------------------------------------------------ */
@@ -517,97 +524,123 @@
     /* ------------------------------------------------------------------ */
 
     function buildTvForm(body, item, tmdbId, modeGroup) {
-        var seasonsContainer = document.createElement('div');
-        seasonsContainer.className = 'cutdacord-seasons-container';
+        var formContainer = document.createElement('div');
+        formContainer.className = 'cutdacord-tv-form';
 
         var loadingEl = document.createElement('div');
         loadingEl.className = 'cutdacord-loading';
         loadingEl.textContent = 'Loading seasons...';
-        seasonsContainer.appendChild(loadingEl);
+        formContainer.appendChild(loadingEl);
+        body.appendChild(formContainer);
 
-        body.appendChild(seasonsContainer);
-
-        // Fetch seasons from CutDaCord API
         api('GET', '/v1/tmdb/tv/' + encodeURIComponent(tmdbId) + '/seasons').then(function (data) {
-            // Clear loading
-            seasonsContainer.textContent = '';
+            while (formContainer.firstChild) formContainer.removeChild(formContainer.firstChild);
 
             if (!data || !data.seasons || data.seasons.length === 0) {
-                var noSeasons = document.createElement('p');
-                noSeasons.className = 'cutdacord-no-seasons';
-                noSeasons.textContent = 'No season information available.';
-                seasonsContainer.appendChild(noSeasons);
+                var noData = document.createElement('p');
+                noData.textContent = 'No season info available';
+                noData.style.color = 'rgba(255,255,255,0.5)';
+                formContainer.appendChild(noData);
                 return;
             }
 
-            var seasons = data.seasons;
+            var seasons = data.seasons.filter(function (s) { return s.season_number > 0; });
 
-            // Section label
-            var sectionLabel = document.createElement('div');
-            sectionLabel.className = 'cutdacord-section-label';
-            sectionLabel.textContent = 'Select Seasons';
-            seasonsContainer.appendChild(sectionLabel);
+            // Season dropdown
+            var seasonLabel = document.createElement('div');
+            seasonLabel.className = 'cutdacord-section-label';
+            seasonLabel.textContent = 'Season';
+            formContainer.appendChild(seasonLabel);
 
-            // "All Seasons" toggle
-            var allWrapper = document.createElement('label');
-            allWrapper.className = 'cutdacord-checkbox-label cutdacord-checkbox-all';
+            var seasonSelect = document.createElement('select');
+            seasonSelect.className = 'cutdacord-select';
+            seasons.forEach(function (s) {
+                var opt = document.createElement('option');
+                opt.value = String(s.season_number);
+                opt.textContent = s.name || ('Season ' + s.season_number);
+                seasonSelect.appendChild(opt);
+            });
+            formContainer.appendChild(seasonSelect);
 
-            var allCheck = document.createElement('input');
-            allCheck.type = 'checkbox';
-            allCheck.className = 'cutdacord-checkbox';
-            allCheck.dataset.allToggle = 'true';
+            // Radio: Full Season / Specific Episode
+            var radioGroup = document.createElement('div');
+            radioGroup.className = 'cutdacord-radio-group';
 
-            var allSpan = document.createElement('span');
-            allSpan.textContent = 'All Seasons';
+            var fullLabel = document.createElement('label');
+            fullLabel.className = 'cutdacord-radio-label';
+            var fullRadio = document.createElement('input');
+            fullRadio.type = 'radio';
+            fullRadio.name = 'cutdacord-ep-mode';
+            fullRadio.value = 'full';
+            fullRadio.checked = true;
+            fullRadio.className = 'cutdacord-radio';
+            var fullSpan = document.createElement('span');
+            fullSpan.textContent = 'Full Season';
+            fullLabel.appendChild(fullRadio);
+            fullLabel.appendChild(fullSpan);
+            radioGroup.appendChild(fullLabel);
 
-            allWrapper.appendChild(allCheck);
-            allWrapper.appendChild(allSpan);
-            seasonsContainer.appendChild(allWrapper);
+            var epLabel = document.createElement('label');
+            epLabel.className = 'cutdacord-radio-label';
+            var epRadio = document.createElement('input');
+            epRadio.type = 'radio';
+            epRadio.name = 'cutdacord-ep-mode';
+            epRadio.value = 'episode';
+            epRadio.className = 'cutdacord-radio';
+            var epSpan = document.createElement('span');
+            epSpan.textContent = 'Specific Episode';
+            epLabel.appendChild(epRadio);
+            epLabel.appendChild(epSpan);
+            radioGroup.appendChild(epLabel);
 
-            // Individual season checkboxes
-            var checkboxList = document.createElement('div');
-            checkboxList.className = 'cutdacord-season-list';
+            formContainer.appendChild(radioGroup);
 
-            var seasonCheckboxes = [];
+            // Episode dropdown (hidden by default)
+            var epSection = document.createElement('div');
+            epSection.className = 'cutdacord-episode-section';
+            epSection.style.display = 'none';
 
-            for (var i = 0; i < seasons.length; i++) {
-                var season = seasons[i];
-                // Skip specials (season 0) unless it's the only one
-                var seasonNum = season.season_number !== undefined ? season.season_number : (i + 1);
+            var epSelectLabel = document.createElement('div');
+            epSelectLabel.className = 'cutdacord-section-label';
+            epSelectLabel.textContent = 'Episode';
+            epSection.appendChild(epSelectLabel);
 
-                var wrapper = document.createElement('label');
-                wrapper.className = 'cutdacord-checkbox-label';
+            var epSelect = document.createElement('select');
+            epSelect.className = 'cutdacord-select';
+            epSection.appendChild(epSelect);
+            formContainer.appendChild(epSection);
 
-                var cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.className = 'cutdacord-checkbox cutdacord-season-cb';
-                cb.value = String(seasonNum);
+            // Load episodes when season changes or episode mode selected
+            function loadSeasonEpisodes() {
+                var seasonNum = parseInt(seasonSelect.value, 10);
+                while (epSelect.firstChild) epSelect.removeChild(epSelect.firstChild);
 
-                var cbSpan = document.createElement('span');
-                cbSpan.textContent = season.name || ('Season ' + seasonNum);
+                var loadOpt = document.createElement('option');
+                loadOpt.textContent = 'Loading...';
+                loadOpt.disabled = true;
+                epSelect.appendChild(loadOpt);
 
-                wrapper.appendChild(cb);
-                wrapper.appendChild(cbSpan);
-                checkboxList.appendChild(wrapper);
-                seasonCheckboxes.push(cb);
+                api('GET', '/v1/tmdb/tv/' + encodeURIComponent(tmdbId) + '/season/' + seasonNum).then(function (epData) {
+                    while (epSelect.firstChild) epSelect.removeChild(epSelect.firstChild);
+                    if (!epData || !epData.episodes) return;
+
+                    epData.episodes.forEach(function (ep) {
+                        var opt = document.createElement('option');
+                        opt.value = String(ep.episode_number);
+                        opt.textContent = 'E' + (ep.episode_number < 10 ? '0' : '') + ep.episode_number + ' - ' + (ep.name || 'Episode ' + ep.episode_number);
+                        epSelect.appendChild(opt);
+                    });
+                });
             }
 
-            seasonsContainer.appendChild(checkboxList);
-
-            // "All" toggle behaviour
-            allCheck.addEventListener('change', function () {
-                for (var j = 0; j < seasonCheckboxes.length; j++) {
-                    seasonCheckboxes[j].checked = allCheck.checked;
-                }
+            // Toggle episode dropdown visibility
+            fullRadio.addEventListener('change', function () { epSection.style.display = 'none'; });
+            epRadio.addEventListener('change', function () {
+                epSection.style.display = 'block';
+                loadSeasonEpisodes();
             });
-
-            // Uncheck "all" if any individual is unchecked
-            checkboxList.addEventListener('change', function () {
-                var allChecked = true;
-                for (var j = 0; j < seasonCheckboxes.length; j++) {
-                    if (!seasonCheckboxes[j].checked) { allChecked = false; break; }
-                }
-                allCheck.checked = allChecked;
+            seasonSelect.addEventListener('change', function () {
+                if (epRadio.checked) loadSeasonEpisodes();
             });
 
             // Submit button
@@ -617,41 +650,51 @@
             submitBtn.textContent = 'Submit Request';
 
             submitBtn.addEventListener('click', function () {
-                var selectedSeasons = [];
-                for (var j = 0; j < seasonCheckboxes.length; j++) {
-                    if (seasonCheckboxes[j].checked) {
-                        selectedSeasons.push(parseInt(seasonCheckboxes[j].value, 10));
-                    }
-                }
-
-                if (selectedSeasons.length === 0) {
-                    showToast('Please select at least one season.', 'warn');
-                    return;
-                }
-
+                var seasonNum = parseInt(seasonSelect.value, 10);
                 submitBtn.disabled = true;
                 submitBtn.textContent = 'Submitting...';
 
-                var payload = {
-                    tmdb_id: parseInt(tmdbId, 10),
-                    query: item.Name || '',
-                    seasons: selectedSeasons,
-                    acquisition_mode: getSelectedMode()
-                };
-
-                api('POST', '/v1/request/batch', payload).then(function (result) {
-                    if (result) {
-                        showToast('TV request submitted!', 'success');
-                        closeRequestModal();
-                    } else {
-                        showToast('Failed to submit request.', 'error');
-                        submitBtn.disabled = false;
-                        submitBtn.textContent = 'Submit Request';
-                    }
-                });
+                if (epRadio.checked && epSelect.value) {
+                    // Specific episode request
+                    var epNum = parseInt(epSelect.value, 10);
+                    api('POST', '/v1/request', {
+                        tmdb_id: parseInt(tmdbId, 10),
+                        media_type: 'tv',
+                        query: item.Name || '',
+                        season: seasonNum,
+                        episode: epNum,
+                        acquisition_mode: getSelectedMode()
+                    }).then(function (result) {
+                        if (result) {
+                            showToast('Episode requested!', 'success');
+                            closeRequestModal();
+                        } else {
+                            showToast('Failed to submit request.', 'error');
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'Submit Request';
+                        }
+                    });
+                } else {
+                    // Full season request
+                    api('POST', '/v1/request/batch', {
+                        tmdb_id: parseInt(tmdbId, 10),
+                        query: item.Name || '',
+                        seasons: [seasonNum],
+                        acquisition_mode: getSelectedMode()
+                    }).then(function (result) {
+                        if (result) {
+                            showToast('Season requested!', 'success');
+                            closeRequestModal();
+                        } else {
+                            showToast('Failed to submit request.', 'error');
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'Submit Request';
+                        }
+                    });
+                }
             });
 
-            body.appendChild(submitBtn);
+            formContainer.appendChild(submitBtn);
         });
     }
 
@@ -1098,7 +1141,11 @@
         var card = document.createElement('div');
         card.className = 'cutdacord-search-card';
         card.addEventListener('click', function () {
-            openTmdbRequestModal(tmdbId, mediaType, title, year, overview, posterPath);
+            if (mediaType === 'movie') {
+                openTmdbRequestModal(tmdbId, mediaType, title, year, overview, posterPath);
+            } else {
+                toggleTvExpansion(card, tmdbId, title, year);
+            }
         });
 
         // Poster
@@ -1144,6 +1191,184 @@
 
         card.appendChild(info);
         return card;
+    }
+
+    function toggleTvExpansion(card, tmdbId, title, year) {
+        // If already expanded, collapse
+        var existing = card.parentNode.querySelector('.cutdacord-tv-expand[data-tmdb="' + tmdbId + '"]');
+        if (existing) {
+            existing.parentNode.removeChild(existing);
+            return;
+        }
+
+        var container = document.createElement('div');
+        container.className = 'cutdacord-tv-expand';
+        container.setAttribute('data-tmdb', tmdbId);
+        container.addEventListener('click', function(e) { e.stopPropagation(); });
+
+        var loadingEl = document.createElement('div');
+        loadingEl.className = 'cutdacord-loading';
+        loadingEl.textContent = 'Loading seasons...';
+        container.appendChild(loadingEl);
+
+        // Insert after the card
+        card.parentNode.insertBefore(container, card.nextSibling);
+
+        api('GET', '/v1/tmdb/tv/' + encodeURIComponent(tmdbId) + '/seasons').then(function (data) {
+            while (container.firstChild) container.removeChild(container.firstChild);
+
+            if (!data || !data.seasons || data.seasons.length === 0) {
+                var noData = document.createElement('p');
+                noData.textContent = 'No season info available';
+                noData.style.color = 'rgba(255,255,255,0.5)';
+                noData.style.padding = '8px';
+                container.appendChild(noData);
+                return;
+            }
+
+            // Title bar
+            var titleBar = document.createElement('div');
+            titleBar.style.cssText = 'padding:8px 12px;font-weight:600;font-size:14px;border-bottom:1px solid rgba(255,255,255,0.1)';
+            titleBar.textContent = title + (year ? ' (' + year + ')' : '');
+            container.appendChild(titleBar);
+
+            data.seasons.forEach(function (season) {
+                var seasonNum = season.season_number;
+                if (seasonNum === 0) return; // skip specials
+
+                var header = document.createElement('div');
+                header.className = 'cutdacord-season-header';
+
+                var arrow = document.createElement('span');
+                arrow.className = 'cutdacord-season-arrow';
+                arrow.textContent = '\u25B6'; // right arrow
+                header.appendChild(arrow);
+
+                var label = document.createElement('span');
+                label.textContent = (season.name || 'Season ' + seasonNum) + ' (' + (season.episode_count || '?') + ' episodes)';
+                header.appendChild(label);
+
+                // Full season request button
+                var seasonBtn = document.createElement('button');
+                seasonBtn.className = 'cutdacord-episode-request-btn';
+                seasonBtn.textContent = 'Request Season';
+                seasonBtn.style.marginLeft = 'auto';
+                seasonBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    seasonBtn.disabled = true;
+                    seasonBtn.textContent = 'Requesting...';
+                    api('POST', '/v1/request/batch', {
+                        tmdb_id: parseInt(tmdbId, 10),
+                        query: title,
+                        seasons: [seasonNum],
+                        acquisition_mode: 'download'
+                    }).then(function (result) {
+                        if (result) {
+                            showToast('Season ' + seasonNum + ' requested!', 'success');
+                            seasonBtn.textContent = 'Requested!';
+                        } else {
+                            showToast('Request failed', 'error');
+                            seasonBtn.disabled = false;
+                            seasonBtn.textContent = 'Request Season';
+                        }
+                    });
+                });
+                header.appendChild(seasonBtn);
+
+                container.appendChild(header);
+
+                // Episode container (hidden initially)
+                var epContainer = document.createElement('div');
+                epContainer.className = 'cutdacord-episode-list';
+                epContainer.style.display = 'none';
+                container.appendChild(epContainer);
+
+                header.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    var isOpen = epContainer.style.display !== 'none';
+                    if (isOpen) {
+                        epContainer.style.display = 'none';
+                        arrow.textContent = '\u25B6';
+                        header.classList.remove('cutdacord-season-expanded');
+                    } else {
+                        epContainer.style.display = 'block';
+                        arrow.textContent = '\u25BC';
+                        header.classList.add('cutdacord-season-expanded');
+                        if (!epContainer.dataset.loaded) {
+                            loadEpisodes(epContainer, tmdbId, seasonNum, title);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    function loadEpisodes(container, tmdbId, seasonNum, title) {
+        container.dataset.loaded = 'true';
+        var loading = document.createElement('div');
+        loading.className = 'cutdacord-loading';
+        loading.textContent = 'Loading episodes...';
+        container.appendChild(loading);
+
+        api('GET', '/v1/tmdb/tv/' + encodeURIComponent(tmdbId) + '/season/' + seasonNum).then(function (data) {
+            while (container.firstChild) container.removeChild(container.firstChild);
+
+            if (!data || !data.episodes || data.episodes.length === 0) {
+                var noEp = document.createElement('p');
+                noEp.textContent = 'No episodes found';
+                noEp.style.cssText = 'color:rgba(255,255,255,0.5);padding:8px 12px;font-size:13px';
+                container.appendChild(noEp);
+                return;
+            }
+
+            data.episodes.forEach(function (ep) {
+                var row = document.createElement('div');
+                row.className = 'cutdacord-episode-row';
+
+                var info = document.createElement('div');
+                info.className = 'cutdacord-episode-info';
+
+                var epNum = document.createElement('span');
+                epNum.className = 'cutdacord-episode-num';
+                epNum.textContent = 'E' + (ep.episode_number < 10 ? '0' : '') + ep.episode_number;
+                info.appendChild(epNum);
+
+                var epTitle = document.createElement('span');
+                epTitle.className = 'cutdacord-episode-title';
+                epTitle.textContent = ep.name || 'Episode ' + ep.episode_number;
+                info.appendChild(epTitle);
+
+                row.appendChild(info);
+
+                var reqBtn = document.createElement('button');
+                reqBtn.className = 'cutdacord-episode-request-btn';
+                reqBtn.textContent = 'Request';
+                reqBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    reqBtn.disabled = true;
+                    reqBtn.textContent = 'Requesting...';
+                    api('POST', '/v1/request', {
+                        tmdb_id: parseInt(tmdbId, 10),
+                        media_type: 'tv',
+                        query: title,
+                        season: seasonNum,
+                        episode: ep.episode_number,
+                        acquisition_mode: 'download'
+                    }).then(function (result) {
+                        if (result) {
+                            showToast('S' + (seasonNum < 10 ? '0' : '') + seasonNum + 'E' + (ep.episode_number < 10 ? '0' : '') + ep.episode_number + ' requested!', 'success');
+                            reqBtn.textContent = 'Requested!';
+                        } else {
+                            showToast('Request failed', 'error');
+                            reqBtn.disabled = false;
+                            reqBtn.textContent = 'Request';
+                        }
+                    });
+                });
+                row.appendChild(reqBtn);
+                container.appendChild(row);
+            });
+        });
     }
 
     function openTmdbRequestModal(tmdbId, mediaType, title, year, overview, posterPath) {
@@ -1211,6 +1436,221 @@
                 console.warn('[CutDaCord] ApiClient not available. Plugin will not function.');
             }
         }, 100);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Netflix Homepage — Hero Banner + Recommendation Rows               */
+    /* ------------------------------------------------------------------ */
+
+    var _jellyfinBase = '';
+
+    function getJellyfinBase() {
+        if (_jellyfinBase) return _jellyfinBase;
+        // Derive from current page URL (works for both direct and proxied access)
+        _jellyfinBase = window.location.origin;
+        return _jellyfinBase;
+    }
+
+    function isHomePage() {
+        var hash = window.location.hash || '';
+        return hash === '' || hash === '#' || hash.indexOf('#!/home') === 0 || hash === '#!/home.html';
+    }
+
+    function initHeroBanner(container) {
+        if (document.querySelector('.cutdacord-hero')) return; // already rendered
+
+        api('GET', '/v1/recommendations/featured').then(function (data) {
+            if (!data || !data.id) return;
+
+            var hero = document.createElement('div');
+            hero.className = 'cutdacord-hero';
+
+            // Background image
+            var bg = document.createElement('div');
+            bg.className = 'cutdacord-hero-bg';
+            var jellyfinBase = (ApiClient && ApiClient._serverAddress) ? ApiClient._serverAddress : '';
+            var imgUrl = jellyfinBase + '/Items/' + encodeURIComponent(data.id) + '/Images/Backdrop?maxWidth=1920&quality=80';
+            if (data.backdropImageTag) {
+                imgUrl += '&tag=' + encodeURIComponent(data.backdropImageTag);
+            }
+            bg.style.backgroundImage = 'url(' + imgUrl + ')';
+            hero.appendChild(bg);
+
+            // Gradient overlay
+            var gradient = document.createElement('div');
+            gradient.className = 'cutdacord-hero-gradient';
+            hero.appendChild(gradient);
+
+            // Content
+            var content = document.createElement('div');
+            content.className = 'cutdacord-hero-content';
+
+            var title = document.createElement('h1');
+            title.className = 'cutdacord-hero-title';
+            title.textContent = data.name;
+            content.appendChild(title);
+
+            // Meta line
+            var metaParts = [];
+            if (data.year) metaParts.push(data.year);
+            if (data.rating) metaParts.push(data.rating);
+            if (data.communityRating) metaParts.push('\u2605 ' + data.communityRating.toFixed(1));
+            if (data.genres && data.genres.length > 0) metaParts.push(data.genres.slice(0, 3).join(', '));
+            if (metaParts.length > 0) {
+                var meta = document.createElement('p');
+                meta.className = 'cutdacord-hero-meta';
+                meta.textContent = metaParts.join(' \u00B7 ');
+                content.appendChild(meta);
+            }
+
+            // Overview
+            if (data.overview) {
+                var overview = document.createElement('p');
+                overview.className = 'cutdacord-hero-overview';
+                overview.textContent = data.overview;
+                content.appendChild(overview);
+            }
+
+            // Action buttons
+            var actions = document.createElement('div');
+            actions.className = 'cutdacord-hero-actions';
+
+            var playBtn = document.createElement('button');
+            playBtn.className = 'cutdacord-hero-btn cutdacord-hero-btn--play';
+            playBtn.textContent = '\u25B6 Play';
+            playBtn.addEventListener('click', function () {
+                window.location.hash = '#!/details?id=' + encodeURIComponent(data.id) + '&autoplay=true';
+            });
+            actions.appendChild(playBtn);
+
+            var infoBtn = document.createElement('button');
+            infoBtn.className = 'cutdacord-hero-btn cutdacord-hero-btn--info';
+            infoBtn.textContent = '\u2139 More Info';
+            infoBtn.addEventListener('click', function () {
+                window.location.hash = '#!/details?id=' + encodeURIComponent(data.id);
+            });
+            actions.appendChild(infoBtn);
+
+            content.appendChild(actions);
+            hero.appendChild(content);
+
+            // Insert at top of homepage sections
+            container.insertBefore(hero, container.firstChild);
+        }).catch(function (err) {
+            console.warn('[CutDaCord] Hero banner unavailable:', err);
+        });
+    }
+
+    function initRecommendationRows(container) {
+        // Don't add twice
+        if (container.querySelector('.cutdacord-rec-section')) return;
+
+        api('GET', '/v1/recommendations?limit=3').then(function (data) {
+            if (!data || !data.sections || data.sections.length === 0) return;
+
+            // Find insertion point: after the 2nd existing section (or at end)
+            var existingSections = container.querySelectorAll('.verticalSection');
+            var insertBefore = existingSections.length > 2 ? existingSections[2] : null;
+
+            data.sections.forEach(function (section) {
+                var sectionEl = document.createElement('div');
+                sectionEl.className = 'cutdacord-rec-section';
+
+                var titleEl = document.createElement('h2');
+                titleEl.className = 'cutdacord-rec-title';
+                var reasonSpan = document.createElement('span');
+                reasonSpan.className = 'cutdacord-rec-reason';
+                reasonSpan.textContent = 'Because You Watched ';
+                titleEl.appendChild(reasonSpan);
+                titleEl.appendChild(document.createTextNode(section.basedOn));
+                sectionEl.appendChild(titleEl);
+
+                var scroller = document.createElement('div');
+                scroller.className = 'cutdacord-rec-scroller';
+
+                section.items.forEach(function (item) {
+                    var card = document.createElement('a');
+                    card.className = 'cutdacord-rec-card';
+                    card.href = '#!/details?id=' + encodeURIComponent(item.id);
+
+                    var img = document.createElement('img');
+                    img.className = 'cutdacord-rec-card-img';
+                    img.alt = item.name || '';
+                    img.loading = 'lazy';
+                    var posterUrl = getJellyfinBase() + '/Items/' + encodeURIComponent(item.id) + '/Images/Primary?maxWidth=200&quality=80';
+                    if (item.primaryImageTag) {
+                        posterUrl += '&tag=' + encodeURIComponent(item.primaryImageTag);
+                    }
+                    var safePoster = sanitizeImageUrl(posterUrl, [getJellyfinBase()]);
+                    if (safePoster) {
+                        img.src = safePoster;
+                    }
+                    card.appendChild(img);
+
+                    var cardTitle = document.createElement('div');
+                    cardTitle.className = 'cutdacord-rec-card-title';
+                    cardTitle.textContent = item.name || 'Unknown';
+                    card.appendChild(cardTitle);
+
+                    scroller.appendChild(card);
+                });
+
+                sectionEl.appendChild(scroller);
+
+                if (insertBefore) {
+                    container.insertBefore(sectionEl, insertBefore);
+                } else {
+                    container.appendChild(sectionEl);
+                }
+            });
+        }).catch(function (err) {
+            console.warn('[CutDaCord] Recommendation rows error:', err);
+        });
+    }
+
+    function initNetflixHomepage() {
+        if (!isHomePage()) return;
+
+        var container = document.querySelector('.homeSectionsContainer');
+        if (container) {
+            initHeroBanner(container);
+            initRecommendationRows(container);
+            return;
+        }
+
+        // MutationObserver to detect container appearance
+        var observer = new MutationObserver(function () {
+            var found = document.querySelector('.homeSectionsContainer');
+            if (found) {
+                observer.disconnect();
+                initHeroBanner(found);
+                initRecommendationRows(found);
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Safety timeout: disconnect observer after 15s
+        setTimeout(function () { observer.disconnect(); }, 15000);
+    }
+
+    // Listen for SPA navigation
+    window.addEventListener('hashchange', function () {
+        if (!isHomePage()) {
+            // Clean up Netflix elements when navigating away
+            var existingHero = document.querySelector('.cutdacord-hero');
+            if (existingHero) existingHero.remove();
+            document.querySelectorAll('.cutdacord-rec-section').forEach(function (el) { el.remove(); });
+        } else {
+            // Small delay to let Jellyfin render the new page
+            setTimeout(initNetflixHomepage, 500);
+        }
+    });
+
+    // Initial call
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initNetflixHomepage);
+    } else {
+        initNetflixHomepage();
     }
 
 })();
