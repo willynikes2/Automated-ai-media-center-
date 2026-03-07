@@ -231,8 +231,6 @@ async def process_request(job_id: str) -> None:
         # Worker is done -- webhooks drive the rest.
         logger.info("Job %s: search triggered, worker exiting (webhooks drive the rest)", job.id)
 
-    except ContentNotReleasedError as exc:
-        await transition(job, JobState.WAITING, exc.monitor_reason)
     except Exception as exc:
         logger.exception("Unhandled error in job %s: %s", job_id, exc)
         await transition(job, JobState.FAILED, f"Unexpected error: {str(exc)[:200]}")

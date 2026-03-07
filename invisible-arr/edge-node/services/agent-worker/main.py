@@ -168,8 +168,6 @@ async def _recover_stale_jobs() -> None:
 
     TRANSIENT_STATES = (
         JobState.SEARCHING.value,
-        JobState.DOWNLOADING.value,
-        JobState.IMPORTING.value,
     )
 
     factory = get_session_factory()
@@ -230,7 +228,7 @@ async def _fail_job(job_id: str) -> None:
             logger.error("Job %s not found when trying to mark FAILED", job_id)
             return
 
-        job.state = JobState.FAILED
+        job.state = JobState.FAILED.value
         job.updated_at = datetime.utcnow()
 
         event = JobEvent(
