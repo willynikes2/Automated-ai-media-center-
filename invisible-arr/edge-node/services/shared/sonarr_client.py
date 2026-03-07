@@ -159,6 +159,24 @@ class SonarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_releases(self, series_id: int, season_number: int | None = None, episode_id: int | None = None) -> list[dict]:
+        """Get interactive search results for a series/season/episode."""
+        params: dict = {"seriesId": series_id}
+        if episode_id is not None:
+            params["episodeId"] = episode_id
+        elif season_number is not None:
+            params["seasonNumber"] = season_number
+        resp = await self._client.get("/api/v3/release", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def grab_release(self, guid: str, indexer_id: int) -> dict:
+        """Grab a specific release by GUID."""
+        payload = {"guid": guid, "indexerId": indexer_id}
+        resp = await self._client.post("/api/v3/release", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     async def search_series(self, series_id: int) -> dict:
         """Trigger a full series search."""
         payload = {"name": "SeriesSearch", "seriesId": series_id}

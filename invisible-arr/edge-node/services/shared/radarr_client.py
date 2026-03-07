@@ -101,6 +101,21 @@ class RadarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_releases(self, movie_id: int) -> list[dict]:
+        """Get interactive search results for a movie (manual release selection)."""
+        resp = await self._client.get(
+            "/api/v3/release", params={"movieId": movie_id}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def grab_release(self, guid: str, indexer_id: int) -> dict:
+        """Grab a specific release by GUID (manual selection download)."""
+        payload = {"guid": guid, "indexerId": indexer_id}
+        resp = await self._client.post("/api/v3/release", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     async def trigger_downloaded_movies_scan(
         self,
         path: str,

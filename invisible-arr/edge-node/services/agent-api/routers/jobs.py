@@ -103,13 +103,12 @@ async def list_jobs(
         jobs: list[Job] = list(result.scalars().all())
 
     def _last_error(j: Job) -> str | None:
-        error_states = {JobState.FAILED.value, JobState.INVESTIGATING.value, JobState.UNAVAILABLE.value}
-        if j.state not in {JobState.FAILED, JobState.INVESTIGATING, JobState.UNAVAILABLE} and j.state not in error_states:
-            if not j.events:
-                return None
+        error_states = {JobState.FAILED.value}
+        if j.state not in {JobState.FAILED} and j.state not in error_states:
+            return None
         if not j.events:
             return None
-        # Find the most recent event from an error/investigating state
+        # Find the most recent event from a failed state
         relevant = [e for e in j.events if e.state in error_states]
         if relevant:
             return max(relevant, key=lambda e: e.created_at).message
@@ -159,18 +158,18 @@ async def retry_job(
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        retryable = {JobState.FAILED, JobState.INVESTIGATING, JobState.UNAVAILABLE}
+        retryable = {JobState.FAILED}
         if job.state not in retryable:
-            raise HTTPException(status_code=400, detail="Only failed/investigating/unavailable jobs can be retried")
+            raise HTTPException(status_code=400, detail="Only failed jobs can be retried")
 
         now = datetime.utcnow()
-        job.state = JobState.CREATED
+        job.state = JobState.REQUESTED
         job.retry_count = job.retry_count + 1
         job.updated_at = now
 
         event = JobEvent(
             job_id=job.id,
-            state=JobState.CREATED.value,
+            state=JobState.REQUESTED.value,
             message=f"Manual retry (attempt #{job.retry_count})",
             created_at=now,
         )
@@ -210,7 +209,7 @@ async def cancel_job(
 ) -> JobListResponse:
     """Cancel a non-terminal job by marking it FAILED."""
 
-    terminal = {JobState.DONE, JobState.FAILED}
+    terminal = {JobState.AVAILABLE, JobState.FAILED, JobState.DELETED}
 
     async with get_session_factory()() as session:
         stmt = select(Job).where(Job.id == job_id)
@@ -283,6 +282,142 @@ async def job_progress(
     if progress is None:
         return {"percent": -1, "detail": "No active download"}
     return progress
+
+
+@router.get("/jobs/{job_id}/releases")
+async def get_releases(
+    job_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Get interactive search results for manual release selection."""
+    from shared.radarr_client import RadarrClient
+    from shared.sonarr_client import SonarrClient
+
+    async with get_session_factory()() as session:
+        stmt = select(Job).where(Job.id == job_id)
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Fetch releases from Radarr/Sonarr
+    raw_releases = []
+    try:
+        if job.media_type == "movie" and job.radarr_movie_id:
+            async with RadarrClient() as radarr:
+                raw_releases = await radarr.get_releases(job.radarr_movie_id)
+        elif job.sonarr_series_id:
+            async with SonarrClient() as sonarr:
+                raw_releases = await sonarr.get_releases(
+                    job.sonarr_series_id,
+                    season_number=job.season,
+                    episode_id=None,  # Could pass episode ID if we had it
+                )
+    except Exception as exc:
+        logger.exception("Failed to fetch releases for job %s", job_id)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch releases: {str(exc)[:200]}")
+
+    # Sort by customFormatScore (TRaSH scoring), then by size descending
+    raw_releases.sort(
+        key=lambda r: (r.get("customFormatScore", 0), r.get("size", 0)),
+        reverse=True,
+    )
+
+    # Format for frontend
+    releases = []
+    for i, r in enumerate(raw_releases):
+        quality = r.get("quality", {})
+        quality_name = quality.get("quality", {}).get("name", "?") if isinstance(quality, dict) else str(quality)
+
+        protocol = r.get("protocol", "unknown").lower()
+        if protocol == "torrent":
+            source = "Torrent"
+        elif protocol == "usenet":
+            source = "Usenet"
+        else:
+            source = protocol.title()
+
+        releases.append({
+            "guid": r.get("guid", ""),
+            "title": r.get("title", ""),
+            "quality": quality_name,
+            "size": r.get("size", 0),
+            "sizeDisplay": f"{r.get('size', 0) / (1024**3):.1f} GB" if r.get("size", 0) > 0 else "?",
+            "protocol": source,
+            "seeders": r.get("seeders"),
+            "leechers": r.get("leechers"),
+            "indexer": r.get("indexer", ""),
+            "indexerId": r.get("indexerId", 0),
+            "score": r.get("customFormatScore", 0),
+            "recommended": i < 5,
+            "rejected": bool(r.get("rejected", False)),
+            "rejections": r.get("rejections", []),
+        })
+
+    return releases
+
+
+@router.post("/jobs/{job_id}/grab")
+async def grab_release(
+    job_id: uuid.UUID,
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Grab a specific release for a job (manual selection)."""
+    from shared.radarr_client import RadarrClient
+    from shared.sonarr_client import SonarrClient
+
+    guid = body.get("guid")
+    indexer_id = body.get("indexerId")
+    if not guid or indexer_id is None:
+        raise HTTPException(status_code=422, detail="guid and indexerId are required")
+
+    async with get_session_factory()() as session:
+        stmt = select(Job).where(Job.id == job_id)
+        if user.role != "admin":
+            stmt = stmt.where(Job.user_id == user.id)
+
+        result = await session.execute(stmt)
+        job: Job | None = result.scalar_one_or_none()
+
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Grab the release
+        try:
+            if job.media_type == "movie" and job.radarr_movie_id:
+                async with RadarrClient() as radarr:
+                    await radarr.grab_release(guid, indexer_id)
+            elif job.sonarr_series_id:
+                async with SonarrClient() as sonarr:
+                    await sonarr.grab_release(guid, indexer_id)
+            else:
+                raise HTTPException(status_code=400, detail="Job has no Arr ID — request content first")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to grab release for job %s", job_id)
+            raise HTTPException(status_code=502, detail=f"Failed to grab release: {str(exc)[:200]}")
+
+        # Transition to DOWNLOADING
+        now = datetime.utcnow()
+        job.state = JobState.DOWNLOADING.value
+        job.updated_at = now
+        event = JobEvent(
+            job_id=job.id,
+            state=JobState.DOWNLOADING.value,
+            message=f"Manual release grab: {body.get('title', guid)[:100]}",
+            metadata_json={"guid": guid, "indexerId": indexer_id},
+            created_at=now,
+        )
+        session.add(event)
+        await session.commit()
+
+    logger.info("Job %s: manually grabbed release %s", job_id, guid[:50])
+    return {"status": "grabbed", "job_id": str(job_id)}
 
 
 @router.get("/jobs/{job_id}/events")
