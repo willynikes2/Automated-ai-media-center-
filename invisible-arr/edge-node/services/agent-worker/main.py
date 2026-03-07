@@ -25,9 +25,10 @@ from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E40
 
 from shared.models import JobState  # noqa: E402
 from monitor import monitor_downloads  # noqa: E402
-from worker import process_job  # noqa: E402
+from worker import process_request, check_timeouts  # noqa: E402
 
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
+TIMEOUT_CHECK_INTERVAL = 60  # Check every 60 seconds
 
 from shared.logging import setup_logging  # noqa: E402
 
@@ -88,7 +89,8 @@ async def _run() -> None:
     # Consumer loop ----------------------------------------------------------
     logger.info("Entering job consumer loop (max_concurrent=%d)", MAX_CONCURRENT_JOBS)
     monitor_task = asyncio.create_task(monitor_downloads(_shutdown_event))
-    monitored_checker_task = asyncio.create_task(_check_monitored_jobs(_shutdown_event))
+    waiting_checker_task = asyncio.create_task(_check_waiting_jobs(_shutdown_event))
+    timeout_checker_task = asyncio.create_task(_timeout_checker(_shutdown_event))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
     active_tasks: set[asyncio.Task] = set()
 
@@ -103,18 +105,13 @@ async def _run() -> None:
     async def _run_job(job_id: str) -> None:
         async with semaphore:
             try:
-                await process_job(job_id)
+                await process_request(job_id)
             except Exception:
                 logger.exception("Unhandled exception while processing job %s", job_id)
                 try:
                     await _fail_job(job_id)
                 except Exception:
                     logger.exception("Could not transition job %s to FAILED", job_id)
-
-            try:
-                await _handle_job_outcome(job_id)
-            except Exception:
-                logger.exception("Error in _handle_job_outcome for job %s", job_id)
 
     while not _shutdown_event.is_set():
         try:
@@ -143,15 +140,13 @@ async def _run() -> None:
             await asyncio.wait(pending, timeout=5)
 
     monitor_task.cancel()
-    monitored_checker_task.cancel()
-    try:
-        await monitor_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await monitored_checker_task
-    except asyncio.CancelledError:
-        pass
+    waiting_checker_task.cancel()
+    timeout_checker_task.cancel()
+    for bg_task in (monitor_task, waiting_checker_task, timeout_checker_task):
+        try:
+            await bg_task
+        except asyncio.CancelledError:
+            pass
 
     logger.info("Shutting down agent-worker")
     await redis.aclose()
@@ -163,25 +158,18 @@ async def _run() -> None:
 async def _recover_stale_jobs() -> None:
     """Re-enqueue jobs stuck in transient states from a previous worker crash.
 
-    On startup, any job in RESOLVING/ADDING/ACQUIRING/IMPORTING/VERIFYING
-    has no active worker processing it.  We reset them to CREATED and
-    re-enqueue so the pipeline restarts cleanly.
+    On startup, any job in SEARCHING/DOWNLOADING/IMPORTING has no active
+    worker processing it.  We reset them to REQUESTED and re-enqueue so the
+    pipeline restarts cleanly.
     """
     from shared.models import Job, JobState, JobEvent  # noqa: E402
     from sqlalchemy import select
     from sqlalchemy import update as sa_update
 
     TRANSIENT_STATES = (
-        # Current pipeline states
         JobState.SEARCHING.value,
         JobState.DOWNLOADING.value,
         JobState.IMPORTING.value,
-        JobState.INVESTIGATING.value,
-        # Legacy states
-        JobState.RESOLVING.value,
-        JobState.ADDING.value,
-        JobState.ACQUIRING.value,
-        JobState.VERIFYING.value,
     )
 
     factory = get_session_factory()
@@ -203,14 +191,14 @@ async def _recover_stale_jobs() -> None:
             async with factory() as session:
                 await session.execute(
                     sa_update(Job).where(Job.id == job.id).values(
-                        state=JobState.CREATED.value,
+                        state=JobState.REQUESTED.value,
                         arr_queue_id=None,
                         updated_at=now,
                     )
                 )
                 event = JobEvent(
                     job_id=job.id,
-                    state=JobState.CREATED.value,
+                    state=JobState.REQUESTED.value,
                     message=f"Recovered from stale state '{job.state}' after worker restart",
                     created_at=now,
                 )
@@ -218,46 +206,11 @@ async def _recover_stale_jobs() -> None:
                 await session.commit()
             await enqueue_job(str(job.id))
             logger.info(
-                "Recovered stale job %s (%s) from state %s -> CREATED",
+                "Recovered stale job %s (%s) from state %s -> REQUESTED",
                 job.id, getattr(job, 'query', 'unknown'), job.state,
             )
         except Exception:
             logger.exception("Failed to recover stale job %s", job.id)
-
-
-async def _handle_job_outcome(job_id: str) -> None:
-    """Log job outcome after process_job completes. No external retry logic needed —
-    the observer loop handles diagnostics and fixes internally."""
-    from shared.models import Job, JobState  # noqa: E402
-    from sqlalchemy import select
-    import uuid
-
-    try:
-        factory = get_session_factory()
-        async with factory() as session:
-            result = await session.execute(
-                select(Job).where(Job.id == uuid.UUID(job_id))
-            )
-            job = result.scalar_one_or_none()
-            if not job:
-                return
-
-            if job.state == JobState.DONE.value:
-                logger.info("Job %s (%s) completed successfully", job.id, job.title)
-            elif job.state == JobState.MONITORED.value:
-                logger.info("Job %s (%s) parked as MONITORED — will re-check periodically", job.id, job.title)
-            elif job.state == JobState.UNAVAILABLE.value:
-                logger.info("Job %s (%s) marked UNAVAILABLE after exhausting fixes", job.id, job.title)
-            elif job.state == JobState.VERIFYING.value:
-                logger.info("Job %s (%s) handed off to QC", job.id, job.title)
-            elif job.state == JobState.INVESTIGATING.value:
-                logger.warning("Job %s (%s) still INVESTIGATING after process_job exit", job.id, job.title)
-            elif job.state == JobState.FAILED.value:
-                logger.warning("Job %s (%s) ended in FAILED state", job.id, job.title)
-            else:
-                logger.info("Job %s (%s) ended in state %s", job.id, job.title, job.state)
-    except Exception:
-        logger.exception("Error in _handle_job_outcome for %s", job_id)
 
 
 async def _fail_job(job_id: str) -> None:
@@ -292,13 +245,13 @@ async def _fail_job(job_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# MONITORED job checker
+# WAITING job checker (formerly MONITORED)
 # ---------------------------------------------------------------------------
-MONITORED_CHECK_INTERVAL = int(os.environ.get("MONITORED_CHECK_INTERVAL", "1800"))  # 30 min
+WAITING_CHECK_INTERVAL = int(os.environ.get("MONITORED_CHECK_INTERVAL", "1800"))  # 30 min
 
 
-async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
-    """Periodically check MONITORED jobs to see if content is now available.
+async def _check_waiting_jobs(shutdown_event: asyncio.Event) -> None:
+    """Periodically check WAITING jobs to see if content is now available.
 
     For movies: checks Radarr hasFile.
     For TV: checks Sonarr episodeFile existence.
@@ -310,7 +263,7 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
     from sqlalchemy import select
     from sqlalchemy import update as sa_update
 
-    logger.info("MONITORED job checker starting (interval=%ds)", MONITORED_CHECK_INTERVAL)
+    logger.info("WAITING job checker starting (interval=%ds)", WAITING_CHECK_INTERVAL)
 
     # Wait a bit on startup before first check
     try:
@@ -325,15 +278,15 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
             async with factory() as session:
                 result = await session.execute(
                     select(Job).where(
-                        Job.state.in_([JobState.MONITORED.value, JobState.UNAVAILABLE.value])
+                        Job.state == JobState.WAITING.value
                     )
                 )
-                monitored_jobs = list(result.scalars().all())
+                waiting_jobs = list(result.scalars().all())
 
-            if monitored_jobs:
-                logger.info("Checking %d MONITORED/UNAVAILABLE jobs for availability", len(monitored_jobs))
+            if waiting_jobs:
+                logger.info("Checking %d WAITING jobs for availability", len(waiting_jobs))
 
-            for job in monitored_jobs:
+            for job in waiting_jobs:
                 if shutdown_event.is_set():
                     break
                 try:
@@ -368,42 +321,63 @@ async def _check_monitored_jobs(shutdown_event: asyncio.Event) -> None:
                                             except (ValueError, TypeError):
                                                 pass
                         else:
-                            # Full season — just re-check, Sonarr will handle it
+                            # Full season -- just re-check, Sonarr will handle it
                             available = True
 
                     if available:
-                        logger.info("%s job %s (%s) — content now available, re-enqueuing", job.state, job.id, job.title)
+                        logger.info("WAITING job %s (%s) -- content now available, re-enqueuing", job.id, job.title)
                         now = datetime.utcnow()
                         async with factory() as session:
                             await session.execute(
                                 sa_update(Job).where(Job.id == job.id).values(
-                                    state=JobState.CREATED.value,
+                                    state=JobState.REQUESTED.value,
                                     updated_at=now,
                                 )
                             )
                             event = JobEvent(
                                 job_id=job.id,
-                                state=JobState.CREATED.value,
-                                message="Content now available — resuming download",
+                                state=JobState.REQUESTED.value,
+                                message="Content now available -- resuming download",
                                 created_at=now,
                             )
                             session.add(event)
                             await session.commit()
                         await enqueue_job(str(job.id))
                 except Exception:
-                    logger.exception("Error checking %s job %s", job.state, job.id)
+                    logger.exception("Error checking WAITING job %s", job.id)
 
         except Exception:
-            logger.exception("MONITORED checker cycle failed")
+            logger.exception("WAITING checker cycle failed")
 
         # Wait for next cycle or shutdown
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=MONITORED_CHECK_INTERVAL)
+            await asyncio.wait_for(shutdown_event.wait(), timeout=WAITING_CHECK_INTERVAL)
             break
         except asyncio.TimeoutError:
             continue
 
-    logger.info("MONITORED job checker stopped")
+    logger.info("WAITING job checker stopped")
+
+
+# ---------------------------------------------------------------------------
+# Timeout checker
+# ---------------------------------------------------------------------------
+
+
+async def _timeout_checker(shutdown_event: asyncio.Event) -> None:
+    """Periodically check for timed-out SEARCHING jobs."""
+    logger.info("Timeout checker starting (interval=%ds)", TIMEOUT_CHECK_INTERVAL)
+    while not shutdown_event.is_set():
+        try:
+            await check_timeouts()
+        except Exception:
+            logger.exception("Timeout checker cycle failed")
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=TIMEOUT_CHECK_INTERVAL)
+            break
+        except asyncio.TimeoutError:
+            pass
+    logger.info("Timeout checker stopped")
 
 
 # ---------------------------------------------------------------------------

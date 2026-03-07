@@ -1,16 +1,13 @@
-"""Invisible Arr Agent Worker -- Observer+Fixer acquisition pipeline.
+"""Invisible Arr Agent Worker -- Webhook-driven event handler.
 
-The worker adds requests to Sonarr/Radarr and then *observes* until the file
-appears.  It never fails a job on a timer -- instead it diagnoses actual
-problems (via the diagnostics module) and applies targeted fixes (via
-auto_fixer).  Only after exhausting fix attempts does it park the job as
-UNAVAILABLE.
+The worker adds requests to Sonarr/Radarr, triggers a search, and exits.
+All subsequent state transitions (DOWNLOADING, IMPORTING, AVAILABLE) are
+driven by webhooks from Radarr/Sonarr handled in agent-api.
 
 Job lifecycle:
-  CREATED -> SEARCHING -> DOWNLOADING -> VERIFYING -> DONE
-  (INVESTIGATING when a problem is detected and being fixed)
-  (MONITORED when content is unreleased; background task resumes when available)
-  (UNAVAILABLE when all fix attempts exhausted)
+  REQUESTED -> SEARCHING -> [webhook-driven] -> DOWNLOADING -> IMPORTING -> AVAILABLE
+  (WAITING when content is unreleased; background task resumes when available)
+  (FAILED when all download sources exhausted or unrecoverable error)
 """
 
 from __future__ import annotations
@@ -18,27 +15,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 from sqlalchemy import select, update as sa_update
 
-from auto_fixer import apply_fix, MAX_FIX_ATTEMPTS
-from diagnostics import diagnose_no_grab, diagnose_stalled_download, save_diagnostic, mark_diagnostic_resolved
-
 from shared.config import get_config
 from shared.database import get_session_factory
 from shared.models import Job, JobEvent, JobState, User
 from shared.radarr_client import RadarrClient
 from shared.redis_client import (
-    clear_rdt_ready,
     clear_download_progress,
+    clear_rdt_ready,
     enqueue_qc,
-    get_rdt_ready,
     set_download_progress,
 )
 from shared.sonarr_client import SonarrClient
@@ -51,12 +43,8 @@ logger = logging.getLogger("agent-worker.worker")
 RADARR_QUALITY_PROFILE_ID = 7
 SONARR_QUALITY_PROFILE_ID = 7
 
-# ── Observation thresholds (NOT timeouts — job doesn't fail at these) ─────
-NO_GRAB_INVESTIGATE_AFTER = 300     # 5 min: if no grab, run diagnostics
-DOWNLOAD_STALL_INVESTIGATE = 600    # 10 min: if download not progressing, investigate
-IMPORT_INVESTIGATE_AFTER = 600      # 10 min: after download done, if no file, investigate
-MAX_OBSERVE_TIME = 14400            # 4 hours: absolute max observation before parking
-OBSERVE_POLL_INTERVAL = 30          # 30s between observation checks
+# Search timeout: if no grab after this many seconds, mark FAILED
+SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "7200"))  # 2 hours
 
 
 # ===========================================================================
@@ -194,12 +182,12 @@ class ContentNotReleasedError(Exception):
 # ===========================================================================
 
 
-async def process_job(job_id: str) -> None:
-    """Execute the observer+fixer acquisition pipeline.
+async def process_request(job_id: str) -> None:
+    """Add request to Radarr/Sonarr and trigger search, then exit.
 
-    1. Resolve title (TMDB lookup)
-    2. Add to Arr + trigger search -> SEARCHING
-    3. Observe: wait for webhooks/file to appear, diagnose actual problems
+    The worker's job is done after triggering the search. All subsequent
+    state transitions (DOWNLOADING, IMPORTING, AVAILABLE) are driven by
+    webhooks from Radarr/Sonarr.
     """
     job = await get_job(job_id)
     user = await get_user(job.user_id)
@@ -210,7 +198,7 @@ async def process_job(job_id: str) -> None:
         logger.warning("Could not normalize media permissions for user %s", user.id, exc_info=True)
 
     try:
-        # Phase 1: SEARCHING — resolve + add to Arr + trigger search
+        # Resolve title (TMDB lookup) and add to Arr
         await transition(job, JobState.SEARCHING, "Resolving title and searching for downloads")
 
         async with TMDBClient(config.tmdb_api_key) as tmdb:
@@ -219,7 +207,7 @@ async def process_job(job_id: str) -> None:
                     job.query or job.title, job.media_type
                 )
             except Exception as exc:
-                await transition(job, JobState.INVESTIGATING, f"Could not identify title: {exc}")
+                await transition(job, JobState.FAILED, f"Could not identify title: {exc}")
                 return
 
         await update_job_field(job, tmdb_id=tmdb_id, title=canonical_title)
@@ -233,238 +221,101 @@ async def process_job(job_id: str) -> None:
                 arr_id = await _add_to_sonarr(job, user, tmdb_id, canonical_title)
                 await update_job_field(job, sonarr_series_id=arr_id, acquisition_method="sonarr")
         except ContentNotReleasedError as exc:
-            await transition(job, JobState.MONITORED, exc.monitor_reason, metadata={"original_error": str(exc)})
+            await transition(job, JobState.WAITING, exc.monitor_reason, metadata={"original_error": str(exc)})
             return
         except Exception as exc:
-            await transition(job, JobState.INVESTIGATING, f"Failed to add to library: {exc}")
+            await transition(job, JobState.FAILED, f"Failed to add to library: {exc}")
             return
 
-        # Phase 2: OBSERVE — let Arr do its thing, watch for completion or problems
-        await _observe_until_done(job, user)
+        # Search triggered by _add_to_radarr/_add_to_sonarr.
+        # Worker is done -- webhooks drive the rest.
+        logger.info("Job %s: search triggered, worker exiting (webhooks drive the rest)", job.id)
 
     except ContentNotReleasedError as exc:
-        await transition(job, JobState.MONITORED, exc.monitor_reason)
+        await transition(job, JobState.WAITING, exc.monitor_reason)
     except Exception as exc:
         logger.exception("Unhandled error in job %s: %s", job_id, exc)
-        await transition(job, JobState.INVESTIGATING, f"Unexpected error — investigating: {str(exc)[:200]}")
+        await transition(job, JobState.FAILED, f"Unexpected error: {str(exc)[:200]}")
 
 
 # ===========================================================================
-# Observer loop
+# Webhook-driven event handlers
 # ===========================================================================
 
 
-async def _observe_until_done(job: Job, user: User) -> None:
-    """Observe Arr until file appears in user library. No timer-based failures.
+async def handle_download_failed(job_id: str, source: str) -> None:
+    """Smart retry cascade: RD -> Usenet -> Torrent -> FAILED.
 
-    Checks (every OBSERVE_POLL_INTERVAL seconds):
-    1. Does the file exist already? (hasFile from Arr API) -> finalize
-    2. Did a webhook signal completion? (rdt_ready in Redis) -> wait for import, finalize
-    3. Is there a queue item? -> track progress, check for stalls/errors
-    4. No queue item after NO_GRAB_INVESTIGATE_AFTER? -> diagnose and fix
-    5. Absolute max observation time -> park as MONITORED
+    Called by webhook handler when Radarr/Sonarr reports a download failure.
+    `source` is the download client that failed: "rd", "usenet", or "torrent".
     """
-    start = time.monotonic()
-    last_progress = -1
-    stall_start: float | None = None
-    fix_attempt = 0
-    grabbed = False
+    job = await get_job(job_id)
 
-    while True:
-        elapsed = time.monotonic() - start
+    # Determine next protocol to try
+    cascade = {"rd": "usenet", "usenet": "torrent", "torrent": None}
+    next_protocol = cascade.get(source)
 
-        # Refresh job state from DB (webhook handler may have updated it)
-        job = await get_job(str(job.id))
+    if next_protocol is None:
+        # All sources exhausted
+        await transition(job, JobState.FAILED,
+            f"Download failed from all sources (last: {source})",
+            metadata={"last_source": source})
+        await clear_download_progress(str(job.id))
+        return
 
-        # ── Check 1: File already exists? ──
-        has_file = await _check_has_file(job)
-        if has_file:
-            await _finalize_import(job, user)
-            return
+    # Try next protocol via re-search
+    # For now, just trigger a standard Radarr/Sonarr re-search
+    # Task 4 will add protocol-filtered release grab
+    logger.info("Download failed from %s, triggering re-search for %s (job %s)", source, next_protocol, job.id)
+    await transition(job, JobState.SEARCHING, f"Retrying with {next_protocol} after {source} failure")
 
-        # ── Check 2: Webhook/RDT signal? ──
-        rdt_signal = await get_rdt_ready(str(job.id))
-        if rdt_signal:
-            await clear_rdt_ready(str(job.id))
-            # Give Arr time to complete import
-            for _ in range(30):  # up to 5 min
-                await asyncio.sleep(10)
-                if await _check_has_file(job):
-                    await _finalize_import(job, user)
-                    return
-            # Signal received but file not there yet — continue observing
-
-        # ── Check 3: Queue item with progress? ──
-        queue_item = await _find_our_queue_item(job)
-
-        if queue_item:
-            grabbed = True
-            if job.state != JobState.DOWNLOADING.value:
-                await transition(job, JobState.DOWNLOADING, "Download in progress")
-
-            progress = _get_download_progress(queue_item)
-            title = queue_item.get("title", job.title)
-            timeleft = queue_item.get("timeleft", "")
-            detail = f"{title} ({timeleft})" if timeleft else title
-            await set_download_progress(str(job.id), progress, detail)
-
-            # Check queue item for errors
-            tds = queue_item.get("trackedDownloadStatus", "")
-            status = queue_item.get("status", "")
-
-            if tds in ("warning", "error") or status in ("importBlocked", "importFailed"):
-                diagnosis = await diagnose_stalled_download(job, queue_item)
-                factory = get_session_factory()
-                async with factory() as session:
-                    await save_diagnostic(session, job.id, diagnosis)
-                    await session.commit()
-
-                if fix_attempt < MAX_FIX_ATTEMPTS:
-                    await transition(job, JobState.INVESTIGATING, diagnosis.user_message)
-                    outcome = await apply_fix(job, diagnosis, fix_attempt)
-                    fix_attempt += 1
-                    logger.info("Auto-fix #%d for job %s: %s -> %s", fix_attempt, job.id, diagnosis.auto_fix, outcome)
-                    stall_start = None
-                    await asyncio.sleep(OBSERVE_POLL_INTERVAL)
-                    continue
-                else:
-                    await transition(job, JobState.UNAVAILABLE, diagnosis.user_message)
-                    await clear_download_progress(str(job.id))
-                    return
-
-            # Check for stall (no progress change)
-            if progress == last_progress and 0 < progress < 100:
-                if stall_start is None:
-                    stall_start = time.monotonic()
-                elif time.monotonic() - stall_start > DOWNLOAD_STALL_INVESTIGATE:
-                    diagnosis = await diagnose_stalled_download(job, queue_item)
-                    factory = get_session_factory()
-                    async with factory() as session:
-                        await save_diagnostic(session, job.id, diagnosis)
-                        await session.commit()
-                    if fix_attempt < MAX_FIX_ATTEMPTS:
-                        await transition(job, JobState.INVESTIGATING, diagnosis.user_message)
-                        outcome = await apply_fix(job, diagnosis, fix_attempt)
-                        fix_attempt += 1
-                        stall_start = None
-                        await asyncio.sleep(OBSERVE_POLL_INTERVAL)
-                        continue
-                    else:
-                        await transition(job, JobState.UNAVAILABLE, diagnosis.user_message)
-                        await clear_download_progress(str(job.id))
-                        return
-            else:
-                stall_start = None
-            last_progress = progress
-
-        elif not grabbed and elapsed > NO_GRAB_INVESTIGATE_AFTER:
-            # No queue item and nothing grabbed — diagnose why
-            factory = get_session_factory()
-            async with factory() as session:
-                diagnosis = await diagnose_no_grab(job, session)
-                await save_diagnostic(session, job.id, diagnosis)
-                await session.commit()
-
-            if diagnosis.category == "content_not_released":
-                raise ContentNotReleasedError(diagnosis.user_message)
-
-            if diagnosis.auto_fix in ("set_monitored", "set_monitored_daily"):
-                await transition(job, JobState.MONITORED, diagnosis.user_message)
-                return
-
-            if fix_attempt < MAX_FIX_ATTEMPTS:
-                await transition(job, JobState.INVESTIGATING, diagnosis.user_message)
-                outcome = await apply_fix(job, diagnosis, fix_attempt)
-                fix_attempt += 1
-                logger.info("Auto-fix #%d for job %s: %s -> %s", fix_attempt, job.id, diagnosis.auto_fix, outcome)
-                # Reset observation after fix — give it time to work
-                start = time.monotonic()
-                grabbed = False
-                await asyncio.sleep(OBSERVE_POLL_INTERVAL)
-                continue
-            else:
-                await transition(job, JobState.UNAVAILABLE, diagnosis.user_message)
-                return
-
-        # ── Check 5: Absolute safety net ──
-        if elapsed > MAX_OBSERVE_TIME:
-            logger.warning("Job %s exceeded max observe time (%ds)", job.id, MAX_OBSERVE_TIME)
-            await transition(job, JobState.MONITORED,
-                "Taking longer than expected — we'll keep monitoring and try again later")
-            await clear_download_progress(str(job.id))
-            return
-
-        await asyncio.sleep(OBSERVE_POLL_INTERVAL)
-
-
-# ===========================================================================
-# Observer helpers
-# ===========================================================================
-
-
-async def _check_has_file(job: Job) -> bool:
-    """Check if Arr reports the media has a file."""
     try:
         if job.media_type == "movie" and job.radarr_movie_id:
-            async with RadarrClient() as client:
-                movie = await client.get_movie(job.radarr_movie_id)
-                return movie.get("hasFile", False)
+            async with RadarrClient() as radarr:
+                await radarr.search_movie(job.radarr_movie_id)
         elif job.sonarr_series_id:
-            async with SonarrClient() as client:
+            async with SonarrClient() as sonarr:
                 if job.episode and job.season:
-                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
-                    target = next((e for e in episodes if e.get("episodeNumber") == job.episode), None)
-                    return target.get("hasFile", False) if target else False
+                    episodes = await sonarr.get_episodes(job.sonarr_series_id, job.season)
+                    target_ep = next((e for e in episodes if e.get("episodeNumber") == job.episode), None)
+                    if target_ep:
+                        await sonarr.search_episodes([target_ep["id"]])
+                    else:
+                        await sonarr.search_season(job.sonarr_series_id, job.season)
                 elif job.season:
-                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
-                    return any(e.get("hasFile", False) for e in episodes)
+                    await sonarr.search_season(job.sonarr_series_id, job.season)
+                else:
+                    await sonarr.search_series(job.sonarr_series_id)
     except Exception as exc:
-        logger.warning("Error checking hasFile for job %s: %s", job.id, exc)
-    return False
+        logger.exception("Re-search failed for job %s: %s", job.id, exc)
+        await transition(job, JobState.FAILED, f"Re-search failed after {source} failure: {str(exc)[:200]}")
 
 
-async def _find_our_queue_item(job: Job) -> dict | None:
-    """Find our job's item in the Arr download queue."""
-    try:
-        if job.media_type == "movie" and job.radarr_movie_id:
-            async with RadarrClient() as client:
-                queue = await client.get_queue(page_size=100, include_movie=True)
-                for item in queue.get("records", []):
-                    if item.get("movieId") == job.radarr_movie_id:
-                        # Capture correlation data
-                        if not job.arr_queue_id:
-                            await update_job_field(job, arr_queue_id=item.get("id"))
-                        download_id = item.get("downloadId", "")
-                        if download_id and not job.rd_torrent_id:
-                            await update_job_field(job, rd_torrent_id=download_id)
-                        return item
-        elif job.sonarr_series_id:
-            async with SonarrClient() as client:
-                queue = await client.get_queue(page_size=100, include_series=True)
-                for item in queue.get("records", []):
-                    if item.get("seriesId") == job.sonarr_series_id:
-                        if not job.arr_queue_id:
-                            await update_job_field(job, arr_queue_id=item.get("id"))
-                        download_id = item.get("downloadId", "")
-                        if download_id and not job.rd_torrent_id:
-                            await update_job_field(job, rd_torrent_id=download_id)
-                        return item
-    except Exception as exc:
-        logger.warning("Error checking queue for job %s: %s", job.id, exc)
-    return None
+async def check_timeouts() -> None:
+    """Mark SEARCHING jobs as FAILED if no grab after SEARCH_TIMEOUT."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cutoff = datetime.utcnow() - timedelta(seconds=SEARCH_TIMEOUT)
+        result = await session.execute(
+            select(Job).where(
+                Job.state == JobState.SEARCHING.value,
+                Job.updated_at < cutoff,
+            )
+        )
+        timed_out = list(result.scalars().all())
+
+    for job in timed_out:
+        logger.warning("Job %s timed out in SEARCHING state after %ds", job.id, SEARCH_TIMEOUT)
+        await transition(job, JobState.FAILED, "No releases found matching quality settings")
 
 
-def _get_download_progress(queue_item: dict) -> int:
-    """Extract download progress percentage from queue item."""
-    size = queue_item.get("size", 0)
-    sizeleft = queue_item.get("sizeleft", 0)
-    if size > 0:
-        return max(0, min(100, int(((size - sizeleft) / size) * 100)))
-    return 0
+# ===========================================================================
+# Finalize import (called by webhook handler when file is imported)
+# ===========================================================================
 
 
 async def _finalize_import(job: Job, user: User) -> None:
-    """File confirmed in Arr — update storage, enqueue QC, transition to VERIFYING."""
+    """File confirmed in Arr -- update storage, enqueue QC, transition to IMPORTING."""
     file_size = 0
     imported_path = ""
 
@@ -498,17 +349,11 @@ async def _finalize_import(job: Job, user: User) -> None:
         gb = file_size / (1024 ** 3)
         await update_storage_used(job.user_id, gb)
 
-    # Mark diagnostics resolved
-    factory = get_session_factory()
-    async with factory() as session:
-        await mark_diagnostic_resolved(session, job.id)
-        await session.commit()
-
     # Clear download progress
     await clear_download_progress(str(job.id))
 
-    # Transition to VERIFYING and enqueue QC
-    await transition(job, JobState.VERIFYING, "File imported, running quality check")
+    # Transition to IMPORTING and enqueue QC
+    await transition(job, JobState.IMPORTING, "File imported, running quality check")
 
     try:
         await enqueue_qc(str(job.id))
@@ -517,6 +362,32 @@ async def _finalize_import(job: Job, user: User) -> None:
         logger.exception("Failed to enqueue QC job for %s", job.id)
 
     await clear_rdt_ready(str(job.id))
+
+
+# ===========================================================================
+# Arr has-file check
+# ===========================================================================
+
+
+async def _check_has_file(job: Job) -> bool:
+    """Check if Arr reports the media has a file."""
+    try:
+        if job.media_type == "movie" and job.radarr_movie_id:
+            async with RadarrClient() as client:
+                movie = await client.get_movie(job.radarr_movie_id)
+                return movie.get("hasFile", False)
+        elif job.sonarr_series_id:
+            async with SonarrClient() as client:
+                if job.episode and job.season:
+                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
+                    target = next((e for e in episodes if e.get("episodeNumber") == job.episode), None)
+                    return target.get("hasFile", False) if target else False
+                elif job.season:
+                    episodes = await client.get_episodes(job.sonarr_series_id, season=job.season)
+                    return any(e.get("hasFile", False) for e in episodes)
+    except Exception as exc:
+        logger.warning("Error checking hasFile for job %s: %s", job.id, exc)
+    return False
 
 
 # ===========================================================================
@@ -611,7 +482,7 @@ async def _add_to_sonarr(
             raise ValueError(f"Sonarr lookup failed for tvdb:{tvdb_id}")
         lookup = results[0]
 
-        # Determine monitor type — use "none" initially, then enable
+        # Determine monitor type -- use "none" initially, then enable
         # monitoring on just the target season/episodes so Sonarr grabs them.
         if job.season is not None:
             monitor = "none"
