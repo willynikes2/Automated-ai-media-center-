@@ -7,7 +7,7 @@ contactPoints:
       - uid: grafana-default-email
         type: email
         settings:
-          addresses: "admin@cutdacord.com"
+          addresses: "presientio@gmail.com"
         disableResolveMessage: false
 
 policies:

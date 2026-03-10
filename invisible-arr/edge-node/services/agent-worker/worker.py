@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import sentry_sdk
 from sqlalchemy import select, update as sa_update
 
 from shared.config import get_config
@@ -135,6 +136,19 @@ async def transition(
     job.state = new_state
     job.updated_at = now
     logger.info("Job %s -> %s: %s", job.id, new_state.value, message)
+
+    # Track per-user completions for terminal states
+    if new_state in (JobState.AVAILABLE, JobState.FAILED):
+        try:
+            from shared.metrics import USER_JOB_COMPLETIONS
+            user = await get_user(job.user_id)
+            USER_JOB_COMPLETIONS.labels(
+                user_email=user.email or str(job.user_id),
+                final_state=new_state.value,
+                media_type=job.media_type,
+            ).inc()
+        except Exception:
+            logger.debug("Could not record user job completion metric for job %s", job.id)
 
 
 async def update_job_field(job: Job, **kwargs: Any) -> None:
@@ -512,6 +526,7 @@ async def process_request(job_id: str) -> None:
     """
     job = await get_job(job_id)
     user = await get_user(job.user_id)
+    sentry_sdk.set_user({"id": str(user.id), "email": user.email})
     config = get_config()
     try:
         await ensure_user_media_permissions(user)

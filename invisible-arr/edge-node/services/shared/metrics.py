@@ -38,6 +38,18 @@ JOB_COMPLETIONS = Counter(
     labelnames=["final_state", "acquisition_method"],
 )
 
+USER_JOB_COMPLETIONS = Counter(
+    "user_job_completions_total",
+    "Jobs reaching terminal state per user",
+    labelnames=["user_email", "final_state", "media_type"],
+)
+
+USER_REQUESTS = Counter(
+    "user_requests_total",
+    "Media requests created per user",
+    labelnames=["user_email", "media_type"],
+)
+
 REDIS_CACHE_HITS = Counter("redis_cache_hits_total", "Redis cache hits")
 REDIS_CACHE_MISSES = Counter("redis_cache_misses_total", "Redis cache misses")
 

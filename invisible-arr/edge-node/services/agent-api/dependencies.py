@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Header, HTTPException
+import sentry_sdk
+from fastapi import Header, HTTPException, Request
 from sqlalchemy import func, select
 
 from shared.database import get_session_factory
@@ -22,6 +23,7 @@ _ACTIVE_STATES = [
 
 
 async def get_current_user(
+    request: Request,
     x_api_key: str = Header(..., alias="X-Api-Key"),
 ) -> User:
     """Validate X-Api-Key header and return the corresponding User."""
@@ -35,6 +37,15 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is deactivated")
+    sentry_sdk.set_user({"id": str(user.id), "email": user.email})
+
+    # Set on request.state so middleware can read it after call_next returns
+    # (ContextVars don't propagate back through BaseHTTPMiddleware)
+    request.state.user_id = str(user.id)
+
+    from shared.middleware import user_id_var
+    user_id_var.set(str(user.id))
+
     return user
 
 

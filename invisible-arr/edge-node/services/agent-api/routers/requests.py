@@ -54,6 +54,12 @@ async def create_request(
 
         logger.info("Created job id=%s for query=%r (user=%s)", job.id, body.query, user.id)
 
+        from shared.metrics import USER_REQUESTS
+        USER_REQUESTS.labels(
+            user_email=user.email or str(user.id),
+            media_type=body.media_type,
+        ).inc()
+
     # Enqueue the job for the worker to pick up.
     try:
         await enqueue_job(str(job.id))

@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 correlation_id_var: ContextVar[str] = ContextVar("correlation_id", default="")
+user_id_var: ContextVar[str] = ContextVar("user_id", default="")
 
 logger = logging.getLogger("middleware")
 
@@ -59,10 +60,15 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
                 status=status,
             ).inc()
 
+            # Read user_id from request.state (set by get_current_user dependency)
+            # ContextVars don't propagate back through BaseHTTPMiddleware's call_next
+            uid = getattr(request.state, "user_id", "") or user_id_var.get("")
+
             logger.info(
                 "request_completed",
                 extra={
                     "correlation_id": cid,
+                    "user_id": uid,
                     "method": request.method,
                     "path": path,
                     "status_code": response.status_code,
