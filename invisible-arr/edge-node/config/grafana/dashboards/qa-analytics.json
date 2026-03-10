@@ -417,10 +417,376 @@
       }
     },
     {
+      "id": 60,
+      "title": "── AI QA Swarm ──",
+      "type": "text",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 38 },
+      "options": {
+        "mode": "markdown",
+        "content": "### AI QA Swarm Results\nAutomated testing with 5 AI personas across 22 scenarios"
+      }
+    },
+    {
+      "id": 61,
+      "title": "Latest QA Pass Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROUND(passed * 100.0 / NULLIF(total_scenarios, 0), 1) AS pass_rate FROM qa_runs WHERE total_scenarios > 0 ORDER BY started_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "green", "value": 90 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 62,
+      "title": "Latest QA Scenarios",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT total_scenarios AS total FROM qa_runs WHERE total_scenarios > 0 ORDER BY started_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 63,
+      "title": "Latest QA Failures",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT failed + errored AS failures FROM qa_runs WHERE total_scenarios > 0 ORDER BY started_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 64,
+      "title": "System Health",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT overall_status AS status FROM metrics_snapshots ORDER BY snapshot_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "healthy": { "color": "green", "text": "HEALTHY" }, "degraded": { "color": "yellow", "text": "DEGRADED" }, "critical": { "color": "red", "text": "CRITICAL" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 65,
+      "title": "Services Up",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT (data->'services'->>'up_count')::int || '/' || (data->'services'->>'total_count')::int AS services FROM metrics_snapshots ORDER BY snapshot_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 66,
+      "title": "P95 Latency",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 40 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT (data->'pipeline'->'p95_latency_sec'->>'current')::float AS p95_sec FROM metrics_snapshots ORDER BY snapshot_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 70,
+      "title": "QA Pass Rate Over Time",
+      "description": "Pass rate trend across QA swarm runs",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT started_at AS time, ROUND(passed * 100.0 / NULLIF(total_scenarios, 0), 1) AS \"Pass Rate %\", passed AS \"Passed\", failed AS \"Failed\", errored AS \"Errored\" FROM qa_runs WHERE total_scenarios > 0 ORDER BY started_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Pass Rate %" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Passed" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Errored" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 71,
+      "title": "Recent QA Runs",
+      "description": "Last 10 QA swarm runs",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT started_at AS \"Started\", mode AS \"Mode\", total_scenarios AS \"Total\", passed AS \"Passed\", failed AS \"Failed\", errored AS \"Errors\", ROUND(passed * 100.0 / NULLIF(total_scenarios, 0), 0) AS \"Pass %\", EXTRACT(EPOCH FROM (finished_at - started_at))::int AS \"Duration (s)\" FROM qa_runs WHERE total_scenarios > 0 ORDER BY started_at DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Started" },
+            "properties": [{ "id": "unit", "value": "dateTimeFromNow" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Pass %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 70 }, { "color": "green", "value": 90 }] } },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] } },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 72,
+      "title": "Failing Scenarios (Last 7 Days)",
+      "description": "Most frequently failing QA scenarios",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT persona AS \"Persona\", scenario_name AS \"Scenario\", COUNT(*) AS \"Failures\", MAX(created_at) AS \"Last Seen\", SUBSTRING(MAX(error_message) FROM 1 FOR 120) AS \"Latest Error\" FROM qa_results WHERE status IN ('fail', 'error') AND created_at > NOW() - INTERVAL '7 days' GROUP BY persona, scenario_name ORDER BY \"Failures\" DESC LIMIT 15",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Last Seen" },
+            "properties": [{ "id": "unit", "value": "dateTimeFromNow" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failures" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 5 }] } },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 73,
+      "title": "QA Results by Persona",
+      "description": "Pass/fail breakdown per AI persona",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT persona AS \"Persona\", COUNT(*) FILTER (WHERE status = 'pass') AS \"Passed\", COUNT(*) FILTER (WHERE status IN ('fail', 'error')) AS \"Failed\" FROM qa_results WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY persona ORDER BY persona",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Passed" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "xField": "Persona",
+        "orientation": "horizontal"
+      }
+    },
+    {
       "id": 50,
       "title": "Open Bug Reports",
       "type": "table",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 38 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 60 },
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
