@@ -149,3 +149,65 @@ export async function deleteLibraryItem(req: DeleteMediaRequest): Promise<Delete
   const res = await agentApi.delete('/v1/library/item', { data: req });
   return res.data;
 }
+
+// Jellyfin library items
+export interface JellyfinLibraryItem {
+  Id: string;
+  Name: string;
+  Type: 'Movie' | 'Series';
+  ProductionYear?: number;
+  ImageTags?: { Primary?: string };
+  BackdropImageTags?: string[];
+  CommunityRating?: number;
+  OfficialRating?: string;
+  Overview?: string;
+  MediaSources?: Array<{
+    Path?: string;
+    Size?: number;
+    Container?: string;
+    MediaStreams?: Array<{
+      Type: string;
+      DisplayTitle?: string;
+      Width?: number;
+      Height?: number;
+    }>;
+  }>;
+  RunTimeTicks?: number;
+  Genres?: string[];
+  DateCreated?: string;
+}
+
+export interface JellyfinLibraryResponse {
+  Items: JellyfinLibraryItem[];
+  TotalRecordCount: number;
+}
+
+export async function getJellyfinLibrary(
+  userId: string,
+  mediaType?: 'movie' | 'tv'
+): Promise<JellyfinLibraryResponse> {
+  const includeTypes = mediaType === 'movie' ? 'Movie' : mediaType === 'tv' ? 'Series' : 'Movie,Series';
+  const res = await jellyfinApi.get(`/Users/${userId}/Items`, {
+    params: {
+      IncludeItemTypes: includeTypes,
+      Fields: 'Overview,MediaSources,Path,Genres,DateCreated',
+      Recursive: true,
+      SortBy: 'DateCreated,SortName',
+      SortOrder: 'Descending',
+    },
+  });
+  return res.data;
+}
+
+// Quota info (item-count based)
+export interface QuotaInfo {
+  movie_count: number;
+  movie_quota: number;
+  tv_count: number;
+  tv_quota: number;
+}
+
+export async function getQuotaInfo(): Promise<QuotaInfo> {
+  const res = await agentApi.get('/v1/library/quota');
+  return res.data;
+}

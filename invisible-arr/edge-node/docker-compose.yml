@@ -61,7 +61,7 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/jellyfin:/config
-      - ${MEDIA_PATH:-./data/media}:/data/media:ro
+      - ${MEDIA_PATH:-./data/media}:/data/media
       - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
       - ${RECORDINGS_PATH:-./data/recordings}:/data/recordings
     ports:
@@ -173,23 +173,6 @@ services:
       - TZ=${TZ:-America/New_York}
     volumes:
       - ${CONFIG_PATH:-./config}/prowlarr:/config
-    depends_on:
-      - flaresolverr
-    networks:
-      - internal
-
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
-    restart: unless-stopped
-    environment:
-      - LOG_LEVEL=info
-      - CAPTCHA_SOLVER=none
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8191"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     networks:
       - internal
 
@@ -280,6 +263,7 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - TZ=${TZ:-America/New_York}
+      - CRON_SCHEDULE=@daily
     volumes:
       - ${CONFIG_PATH:-./config}/recyclarr:/config
     networks:
@@ -556,6 +540,8 @@ services:
       - MEDIA_PATH=/data/media
       - DOWNLOADS_PATH=/data/downloads
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN:-}
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - ENV=${ENV:-dev}
     networks:
       - internal
 
@@ -577,6 +563,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - MEDIA_PATH=/data/media
       - JELLYFIN_URL=http://jellyfin:8096
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - ENV=${ENV:-dev}
     networks:
       - internal
 
@@ -596,6 +584,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-invisiblearr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-invisiblearr}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - ENV=${ENV:-dev}
     ports:
       - "127.0.0.1:${IPTV_GATEWAY_PORT:-8881}:8881"
     labels:

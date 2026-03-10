@@ -26,9 +26,10 @@ export interface SearchResponse {
 export async function searchReleases(
   query: string,
   mediaType: 'movie' | 'tv',
+  year?: number,
 ): Promise<SearchResponse> {
-  const res = await agentApi.get('/v1/search/releases', {
-    params: { query, media_type: mediaType },
-  });
+  const params: Record<string, string | number> = { query, media_type: mediaType };
+  if (year) params.year = year;
+  const res = await agentApi.get('/v1/search/releases', { params });
   return res.data;
 }

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from sqlalchemy import select, update as sa_update
 from shared.config import get_config
 from shared.database import get_session_factory
 from shared.models import Job, JobEvent, JobState, User
+from shared.tiers import get_tier_limits
 from shared.radarr_client import RadarrClient
 from shared.redis_client import (
     clear_download_progress,
@@ -33,18 +35,43 @@ from shared.redis_client import (
     enqueue_qc,
     set_download_progress,
 )
+from shared.media_utils import (
+    check_content_registry,
+    hardlink_media,
+    register_content,
+    trigger_jellyfin_refresh,
+)
+from shared.canonical import (
+    add_user_content,
+    check_canonical,
+    check_inflight_download,
+    check_item_quota,
+    create_user_symlink,
+    increment_user_count,
+    register_canonical,
+)
 from shared.sonarr_client import SonarrClient
 from shared.tmdb_client import TMDBClient
 
 logger = logging.getLogger("agent-worker.worker")
 
-# Quality profile IDs created by Recyclarr (Trash Guides)
-# "HD Bluray + WEB" in Radarr, "WEB-1080p" in Sonarr
-RADARR_QUALITY_PROFILE_ID = 7
-SONARR_QUALITY_PROFILE_ID = 7
+# Quality profile names — resolved to IDs dynamically at first use
+RADARR_STANDARD_PROFILE_NAME = os.environ.get("RADARR_PROFILE_NAME", "HD Bluray + WEB")
+RADARR_THEATER_PROFILE_NAME = os.environ.get("RADARR_THEATER_PROFILE_NAME", "Theater Releases")
+SONARR_PROFILE_NAME = os.environ.get("SONARR_PROFILE_NAME", "WEB-1080p")
+
+# Cached profile IDs (resolved on first use)
+_profile_cache: dict[str, int] = {}
 
 # Search timeout: if no grab after this many seconds, mark FAILED
-SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "7200"))  # 2 hours
+SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "1800"))  # 30 minutes
+
+# Minimum free disk space (GB) -- reject new jobs below this threshold
+MIN_FREE_DISK_GB = float(os.environ.get("MIN_FREE_DISK_GB", "10.0"))
+
+# Canonical library root folder paths (shared across all users)
+CANONICAL_MOVIES_ROOT = "/data/media/library/Movies"
+CANONICAL_TV_ROOT = "/data/media/library/TV"
 
 
 # ===========================================================================
@@ -137,6 +164,134 @@ async def update_storage_used(user_id: uuid.UUID, added_gb: float) -> None:
     logger.info("Updated storage for user %s: +%.2f GB", user_id, added_gb)
 
 
+async def _measure_user_storage(user_id: uuid.UUID, config: Any) -> float:
+    """Measure actual disk usage for a user in GB (blocking I/O in thread)."""
+    user_root = Path(config.media_path) / "users" / str(user_id)
+    if not user_root.exists():
+        return 0.0
+
+    def _du() -> float:
+        total = 0
+        for path in user_root.rglob("*"):
+            if path.is_file():
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    pass
+        return total / (1024 ** 3)
+
+    return await asyncio.to_thread(_du)
+
+
+async def _check_quota_before_download(
+    user: User, config: Any, current_job: Job | None = None,
+) -> None:
+    """Check user storage quota and system disk space before adding to Arr.
+
+    Raises ValueError with a descriptive message if the quota is exceeded
+    or disk space is critically low.
+    """
+    # 1. System disk space check -- never let disk go below MIN_FREE_DISK_GB
+    try:
+        stat = os.statvfs(config.media_path)
+        free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+        if free_gb < MIN_FREE_DISK_GB:
+            raise ValueError(
+                f"System disk space critically low ({free_gb:.1f}GB free, "
+                f"minimum {MIN_FREE_DISK_GB:.0f}GB required). "
+                f"Cannot accept new downloads."
+            )
+    except OSError:
+        logger.warning("Could not check disk space at %s", config.media_path)
+
+    # 2. User quota check (skip for unlimited users)
+    if user.storage_quota_gb == -1:
+        return
+
+    # Measure actual disk usage (more reliable than DB counter)
+    actual_gb = await _measure_user_storage(user.id, config)
+
+    # Sync DB value with reality
+    if abs(actual_gb - user.storage_used_gb) > 0.1:
+        await update_storage_used_absolute(user.id, actual_gb)
+        logger.info(
+            "Synced storage for user %s: DB had %.1fGB, actual %.1fGB",
+            user.name, user.storage_used_gb, actual_gb,
+        )
+
+    if actual_gb >= user.storage_quota_gb:
+        raise ValueError(
+            f"Storage quota exceeded: using {actual_gb:.1f}GB "
+            f"of {user.storage_quota_gb:.0f}GB. "
+            f"Delete content or upgrade your plan."
+        )
+
+    # 3. Account for in-flight jobs (SEARCHING/DOWNLOADING) that will consume space
+    exclude_id = current_job.id if current_job else None
+    in_flight_gb = await _estimate_inflight_storage(user, exclude_job_id=exclude_id)
+    projected_gb = actual_gb + in_flight_gb
+
+    if projected_gb >= user.storage_quota_gb:
+        raise ValueError(
+            f"Storage quota would be exceeded: using {actual_gb:.1f}GB "
+            f"+ ~{in_flight_gb:.1f}GB in-flight downloads = "
+            f"~{projected_gb:.1f}GB of {user.storage_quota_gb:.0f}GB quota. "
+            f"Wait for current downloads to finish or delete content."
+        )
+
+    logger.info(
+        "Quota check passed for %s: %.1f/%.0f GB used (%.1fGB in-flight)",
+        user.name, actual_gb, user.storage_quota_gb, in_flight_gb,
+    )
+
+
+async def _estimate_inflight_storage(
+    user: User, exclude_job_id: uuid.UUID | None = None,
+) -> float:
+    """Estimate storage that in-flight jobs will consume when they complete.
+
+    Counts active SEARCHING/DOWNLOADING jobs for this user and estimates
+    their size based on tier limits (max_movie_size_gb, max_episode_size_gb).
+    Excludes the current job (already in SEARCHING) to avoid double-counting.
+    """
+    active_states = [JobState.SEARCHING.value, JobState.DOWNLOADING.value]
+    factory = get_session_factory()
+    async with factory() as session:
+        query = select(Job.media_type).where(
+            Job.user_id == user.id,
+            Job.state.in_(active_states),
+        )
+        if exclude_job_id:
+            query = query.where(Job.id != exclude_job_id)
+        result = await session.execute(query)
+        active_jobs = list(result.scalars().all())
+
+    if not active_jobs:
+        return 0.0
+
+    limits = get_tier_limits(user.tier)
+    max_movie = limits.get("max_movie_size_gb", 3.0)
+    max_episode = limits.get("max_episode_size_gb", 1.0)
+
+    total = 0.0
+    for media_type in active_jobs:
+        total += max_movie if media_type == "movie" else max_episode
+
+    return total
+
+
+async def update_storage_used_absolute(user_id: uuid.UUID, gb: float) -> None:
+    """Set the user's storage_used_gb to an absolute value."""
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            sa_update(User)
+            .where(User.id == user_id)
+            .values(storage_used_gb=gb)
+        )
+        await session.commit()
+
+
 def _apply_permissions_tree(root: Path, uid: int, gid: int) -> None:
     """Best-effort ownership/mode normalization for a user media tree."""
     if not root.exists():
@@ -169,12 +324,178 @@ async def ensure_user_media_permissions(user: User) -> None:
     await asyncio.to_thread(_apply_permissions_tree, user_root, uid, gid)
 
 
+async def _resolve_radarr_profile(name: str) -> int:
+    """Resolve a Radarr quality profile name to its ID (cached)."""
+    cache_key = f"radarr:{name}"
+    if cache_key in _profile_cache:
+        return _profile_cache[cache_key]
+    async with RadarrClient() as client:
+        profiles = await client.get_quality_profiles()
+        for p in profiles:
+            _profile_cache[f"radarr:{p['name']}"] = p["id"]
+    if cache_key not in _profile_cache:
+        raise ValueError(f"Radarr quality profile '{name}' not found. Available: {[p['name'] for p in profiles]}")
+    return _profile_cache[cache_key]
+
+
+async def _resolve_sonarr_profile(name: str) -> int:
+    """Resolve a Sonarr quality profile name to its ID (cached)."""
+    cache_key = f"sonarr:{name}"
+    if cache_key in _profile_cache:
+        return _profile_cache[cache_key]
+    async with SonarrClient() as client:
+        profiles = await client.get_quality_profiles()
+        for p in profiles:
+            _profile_cache[f"sonarr:{p['name']}"] = p["id"]
+    if cache_key not in _profile_cache:
+        raise ValueError(f"Sonarr quality profile '{name}' not found. Available: {[p['name'] for p in profiles]}")
+    return _profile_cache[cache_key]
+
+
 class ContentNotReleasedError(Exception):
-    """Raised when content is not yet digitally available (announced/inCinemas/unaired)."""
+    """Raised when content is not yet available (announced/unaired TV)."""
 
     def __init__(self, message: str, monitor_reason: str = ""):
         super().__init__(message)
         self.monitor_reason = monitor_reason or message
+
+
+# ===========================================================================
+# Content registry shortcut
+# ===========================================================================
+
+
+async def _try_fulfill_from_registry(
+    job: Job,
+    user: User,
+    tmdb_id: int,
+    title: str,
+    config: Any,
+) -> bool:
+    """Legacy content registry check (hardlink). Kept as fallback.
+
+    Returns True if the job was fulfilled (caller should return early).
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        entry = await check_content_registry(
+            session, tmdb_id, job.media_type,
+            season=job.season, episode=job.episode,
+        )
+        if entry is None:
+            return False
+
+        source_path = entry.file_path
+        source_parent = os.path.dirname(source_path)
+        source_folder_name = os.path.basename(source_parent)
+
+        if job.media_type == "movie":
+            dest_dir = os.path.join(
+                config.media_path, "users", str(user.id), "Movies", source_folder_name,
+            )
+        else:
+            source_grandparent = os.path.dirname(source_parent)
+            series_folder = os.path.basename(source_grandparent)
+            if re.match(r"(?i)season\s+\d+", source_folder_name):
+                dest_dir = os.path.join(
+                    config.media_path, "users", str(user.id), "TV",
+                    series_folder, source_folder_name,
+                )
+            else:
+                dest_dir = os.path.join(
+                    config.media_path, "users", str(user.id), "TV", source_folder_name,
+                )
+
+        dest_path = hardlink_media(source_path, dest_dir)
+        logger.info(
+            "Hardlinked from registry: %s -> %s for user %s",
+            source_path, dest_path, user.name,
+        )
+
+    rel_path = os.path.basename(source_path)
+    await update_job_field(job, imported_path=rel_path)
+    await transition(
+        job, JobState.AVAILABLE,
+        f"Fulfilled from content registry (hardlink from existing download)",
+        metadata={"source_path": source_path, "dest_path": dest_path},
+    )
+    await clear_download_progress(str(job.id))
+    await trigger_jellyfin_refresh()
+    return True
+
+
+async def _try_fulfill_from_canonical(
+    job: Job,
+    user: User,
+    tmdb_id: int,
+    title: str,
+    config: Any,
+) -> bool:
+    """Check canonical library and fulfill via symlink if content exists.
+
+    Also adds content to Radarr/Sonarr for the user so Arr manages metadata/upgrades.
+    Returns True if fulfilled (caller should return early).
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        canonical = await check_canonical(session, tmdb_id, job.media_type)
+        if canonical is None:
+            # Check if another job is already downloading this TMDB ID
+            inflight = await check_inflight_download(session, tmdb_id, job.media_type)
+            if inflight and inflight.id != job.id:
+                # Let this job proceed — Radarr/Sonarr will see file already exists
+                # and the webhook handler uses _fulfill_sibling_jobs to handle dedup
+                logger.info(
+                    "Job %s: inflight download for tmdb=%d (job %s), proceeding to Arr (dedup at Arr level)",
+                    job.id, tmdb_id, inflight.id,
+                )
+            return False
+
+        # Content exists in canonical library — fulfill via symlink
+        # 1. Check item quota
+        await check_item_quota(session, user, job.media_type)
+
+        # 2. Create symlink from user's dir to canonical
+        symlink_path = create_user_symlink(
+            canonical.canonical_path, str(user.id), job.media_type,
+        )
+
+        # 3. Track in user_content
+        await add_user_content(
+            session, str(user.id), canonical,
+            job_id=str(job.id), symlink_path=symlink_path,
+        )
+
+        # 4. Increment item count
+        await increment_user_count(session, user.id, job.media_type)
+
+        await session.commit()
+
+    # 5. Update job and transition to AVAILABLE
+    await update_job_field(job, imported_path=os.path.basename(canonical.canonical_path), tmdb_id=tmdb_id)
+    await transition(
+        job, JobState.AVAILABLE,
+        f"Fulfilled from canonical library (symlink)",
+        metadata={"canonical_path": canonical.canonical_path, "symlink_path": symlink_path},
+    )
+    await clear_download_progress(str(job.id))
+    await trigger_jellyfin_refresh()
+
+    # 6. Add to Radarr/Sonarr so Arr manages metadata and upgrades
+    try:
+        if job.media_type == "movie":
+            await _add_to_radarr(job, user, tmdb_id, canonical.title or title)
+        else:
+            await _add_to_sonarr(job, user, tmdb_id, canonical.title or title)
+    except Exception:
+        # Non-fatal: content is already available, Arr registration is best-effort
+        logger.warning("Could not register symlinked content in Arr for user %s", user.name, exc_info=True)
+
+    logger.info(
+        "Job %s fulfilled from canonical (symlink) for user %s: %s",
+        job.id, user.name, canonical.canonical_path,
+    )
+    return True
 
 
 # ===========================================================================
@@ -213,13 +534,67 @@ async def process_request(job_id: str) -> None:
         await update_job_field(job, tmdb_id=tmdb_id, title=canonical_title)
         logger.info("Resolved '%s' -> TMDB %d '%s' (%d)", job.query or job.title, tmdb_id, canonical_title, year)
 
+        # ── Check canonical library: symlink if content already exists ──
+        try:
+            fulfilled = await _try_fulfill_from_canonical(
+                job, user, tmdb_id, canonical_title, config,
+            )
+            if fulfilled:
+                return
+        except ValueError as exc:
+            # Item quota exceeded
+            await transition(job, JobState.FAILED, str(exc))
+            return
+        except Exception:
+            logger.warning(
+                "Canonical check failed for job %s, proceeding with normal flow",
+                job.id, exc_info=True,
+            )
+
+        # ── Fallback: legacy content registry (hardlink) ──
+        try:
+            fulfilled = await _try_fulfill_from_registry(
+                job, user, tmdb_id, canonical_title, config,
+            )
+            if fulfilled:
+                return
+        except Exception:
+            logger.warning(
+                "Content registry check failed for job %s, proceeding with normal flow",
+                job.id, exc_info=True,
+            )
+
+        # ── Enforce quotas before adding to Arr ──
+        # Downloads go to canonical library (shared), so per-user GB quota
+        # is no longer relevant. Check item-count quota and system disk only.
+        try:
+            # System disk space check
+            stat = os.statvfs(config.media_path)
+            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            if free_gb < MIN_FREE_DISK_GB:
+                raise ValueError(
+                    f"System disk space critically low ({free_gb:.1f}GB free, "
+                    f"minimum {MIN_FREE_DISK_GB:.0f}GB required). "
+                    f"Cannot accept new downloads."
+                )
+        except OSError:
+            logger.warning("Could not check disk space at %s", config.media_path)
+        try:
+            # Item-count quota check
+            factory = get_session_factory()
+            async with factory() as session:
+                await check_item_quota(session, user, job.media_type)
+        except ValueError as exc:
+            await transition(job, JobState.FAILED, str(exc))
+            return
+
         try:
             if job.media_type == "movie":
                 arr_id = await _add_to_radarr(job, user, tmdb_id, canonical_title)
-                await update_job_field(job, radarr_movie_id=arr_id, acquisition_method="radarr")
+                # arr_id already saved inside _add_to_radarr before search trigger
             else:
                 arr_id = await _add_to_sonarr(job, user, tmdb_id, canonical_title)
-                await update_job_field(job, sonarr_series_id=arr_id, acquisition_method="sonarr")
+                # arr_id already saved inside _add_to_sonarr before search trigger
         except ContentNotReleasedError as exc:
             await transition(job, JobState.WAITING, exc.monitor_reason, metadata={"original_error": str(exc)})
             return
@@ -342,10 +717,16 @@ async def _finalize_import(job: Job, user: User) -> None:
     if imported_path:
         await update_job_field(job, imported_path=imported_path)
 
-    # Update storage tracking
-    if file_size > 0:
-        gb = file_size / (1024 ** 3)
-        await update_storage_used(job.user_id, gb)
+    # Update storage tracking — sync from filesystem for accuracy
+    try:
+        config = get_config()
+        actual_gb = await _measure_user_storage(job.user_id, config)
+        await update_storage_used_absolute(job.user_id, actual_gb)
+    except Exception:
+        # Fallback to incremental update if measurement fails
+        if file_size > 0:
+            gb = file_size / (1024 ** 3)
+            await update_storage_used(job.user_id, gb)
 
     # Clear download progress
     await clear_download_progress(str(job.id))
@@ -396,8 +777,15 @@ async def _check_has_file(job: Job) -> bool:
 async def _add_to_radarr(
     job: Job, user: User, tmdb_id: int, title: str
 ) -> int:
-    """Add a movie to Radarr. Returns the Radarr movie ID."""
-    preferred_root = f"/data/media/users/{user.id}/Movies"
+    """Add a movie to Radarr. Returns the Radarr movie ID.
+
+    Uses the 'Theater Releases' profile for in-cinema movies (allows CAM/TS/TC
+    with auto-upgrade to HD when proper release comes out). Falls back to
+    standard profile if theater profile doesn't exist.
+    """
+    # Use canonical root for new downloads (shared across users)
+    # Radarr manages the canonical copy; users get symlinks
+    preferred_root = CANONICAL_MOVIES_ROOT
 
     async with RadarrClient() as radarr:
         root_folder_path = await _ensure_radarr_root_folder(radarr, preferred_root)
@@ -406,26 +794,71 @@ async def _add_to_radarr(
         existing = await radarr.get_movie_by_tmdb(tmdb_id)
         if existing:
             movie_id = existing["id"]
+            # Save Arr ID BEFORE triggering search (prevents webhook race)
+            await update_job_field(job, radarr_movie_id=movie_id, acquisition_method="radarr")
             logger.info("Movie already in Radarr (id=%d), triggering search", movie_id)
+
+            # If movie is in cinemas and on standard profile, switch to theater profile
+            movie_status = existing.get("status", "")
+            if movie_status == "inCinemas":
+                try:
+                    theater_id = await _resolve_radarr_profile(RADARR_THEATER_PROFILE_NAME)
+                    if existing.get("qualityProfileId") != theater_id:
+                        existing["qualityProfileId"] = theater_id
+                        await radarr.update_movie(existing)
+                        logger.info("Switched movie %d to Theater profile for in-cinema release", movie_id)
+                except ValueError:
+                    logger.debug("Theater profile not found, using existing profile")
+
             await radarr.search_movie(movie_id)
             return movie_id
+
+        # Determine quality profile based on movie status
+        # For in-cinema movies, use theater profile (allows CAM/TS/TC with upgrade)
+        try:
+            standard_profile_id = await _resolve_radarr_profile(RADARR_STANDARD_PROFILE_NAME)
+        except ValueError:
+            # Fallback to hardcoded ID 7 if name resolution fails
+            standard_profile_id = 7
+            logger.warning("Could not resolve profile '%s', falling back to ID 7", RADARR_STANDARD_PROFILE_NAME)
+
+        quality_profile_id = standard_profile_id
 
         movie = await radarr.add_movie(
             tmdb_id=tmdb_id,
             title=title,
             root_folder_path=root_folder_path,
-            quality_profile_id=RADARR_QUALITY_PROFILE_ID,
-            search_for_movie=True,
+            quality_profile_id=quality_profile_id,
+            search_for_movie=False,  # Don't search yet — save ID first
         )
-        logger.info("Added movie to Radarr: %s (id=%d)", title, movie["id"])
-        return movie["id"]
+        movie_id = movie["id"]
+
+        # Save Arr ID BEFORE triggering search (prevents webhook race)
+        await update_job_field(job, radarr_movie_id=movie_id, acquisition_method="radarr")
+
+        # Check if in-cinema and switch to theater profile
+        movie_status = movie.get("status", "")
+        if movie_status == "inCinemas":
+            try:
+                theater_id = await _resolve_radarr_profile(RADARR_THEATER_PROFILE_NAME)
+                movie["qualityProfileId"] = theater_id
+                await radarr.update_movie(movie)
+                logger.info("Using Theater profile for in-cinema movie: %s", title)
+            except ValueError:
+                logger.info("Theater profile not available, using standard for: %s", title)
+
+        # Now trigger search
+        await radarr.search_movie(movie_id)
+        logger.info("Added movie to Radarr: %s (id=%d)", title, movie_id)
+        return movie_id
 
 
 async def _add_to_sonarr(
     job: Job, user: User, tmdb_id: int, title: str
 ) -> int:
     """Add a series to Sonarr. Returns the Sonarr series ID."""
-    preferred_root = f"/data/media/users/{user.id}/TV"
+    # Use canonical root for new downloads (shared across users)
+    preferred_root = CANONICAL_TV_ROOT
 
     async with SonarrClient() as sonarr:
         root_folder_path = await _ensure_sonarr_root_folder(sonarr, preferred_root)
@@ -438,10 +871,19 @@ async def _add_to_sonarr(
             if not tvdb_id:
                 raise ValueError(f"No TVDB ID found for TMDB {tmdb_id}")
 
+        # Resolve quality profile dynamically
+        try:
+            sonarr_profile_id = await _resolve_sonarr_profile(SONARR_PROFILE_NAME)
+        except ValueError:
+            sonarr_profile_id = 7
+            logger.warning("Could not resolve Sonarr profile '%s', falling back to ID 7", SONARR_PROFILE_NAME)
+
         # Check if already in Sonarr
         existing = await sonarr.get_series_by_tvdb(tvdb_id)
         if existing:
             series_id = existing["id"]
+            # Save Arr ID BEFORE triggering search (prevents webhook race)
+            await update_job_field(job, sonarr_series_id=series_id, acquisition_method="sonarr")
             logger.info("Series already in Sonarr (id=%d), ensuring monitored + triggering search", series_id)
 
             # Ensure series is monitored
@@ -493,15 +935,22 @@ async def _add_to_sonarr(
             title_slug=lookup.get("titleSlug", ""),
             seasons=lookup.get("seasons", []),
             root_folder_path=root_folder_path,
-            quality_profile_id=SONARR_QUALITY_PROFILE_ID,
+            quality_profile_id=sonarr_profile_id,
             monitor=monitor,
-            search_for_missing=(monitor == "all"),
+            search_for_missing=False,  # Don't search yet — save ID first
         )
         series_id = series["id"]
+        # Save Arr ID BEFORE triggering search (prevents webhook race)
+        await update_job_field(job, sonarr_series_id=series_id, acquisition_method="sonarr")
         logger.info("Added series to Sonarr: %s (id=%d)", title, series_id)
 
         # Ensure monitoring on target season/episodes so Sonarr will grab releases
         await _ensure_sonarr_monitored(sonarr, series, job)
+
+        # Trigger search (was deferred so we could save ID first)
+        if monitor == "all":
+            await sonarr.search_series(series_id)
+            return series_id
 
         # If specific season/episode requested, trigger targeted search
         if job.season is not None and job.episode is not None:
@@ -575,6 +1024,12 @@ async def _ensure_sonarr_monitored(sonarr: SonarrClient, series: dict, job: Job)
     if job.season is not None:
         for s in series.get("seasons", []):
             if s["seasonNumber"] == job.season and not s.get("monitored"):
+                s["monitored"] = True
+                changed = True
+    else:
+        # Full series request — monitor ALL seasons
+        for s in series.get("seasons", []):
+            if not s.get("monitored"):
                 s["monitored"] = True
                 changed = True
 

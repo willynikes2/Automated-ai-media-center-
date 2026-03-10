@@ -103,6 +103,32 @@ class JellyfinAdmin:
             )
             return resp.status_code < 400
 
+    async def set_user_audio_defaults(self, jellyfin_user_id: str) -> bool:
+        """Set English audio/subtitle preference for a Jellyfin user."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._base}/Users/{jellyfin_user_id}",
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return False
+            user_config = resp.json().get("Configuration", {})
+
+        user_config["AudioLanguagePreference"] = "eng"
+        user_config["SubtitleLanguagePreference"] = "eng"
+        user_config["SubtitleMode"] = "Default"
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{self._base}/Users/{jellyfin_user_id}/Configuration",
+                headers=self._headers(),
+                json=user_config,
+            )
+            if resp.status_code < 400:
+                logger.info("Set English audio defaults for Jellyfin user %s", jellyfin_user_id)
+                return True
+            return False
+
     async def refresh_library(self) -> None:
         """Trigger a Jellyfin library scan."""
         async with httpx.AsyncClient(timeout=10) as client:
@@ -178,4 +204,63 @@ class JellyfinAdmin:
         else:
             logger.warning("Failed to set library access for %s", username)
 
+        # Set English audio/subtitle defaults
+        await self.set_user_audio_defaults(jellyfin_user_id)
+
         return ok
+
+    async def get_user_items_resume(self, user_id: str, limit: int = 12) -> list[dict]:
+        """Get resumable/in-progress items for a user."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._base}/Users/{user_id}/Items/Resume",
+                params={"Limit": limit, "Fields": "Overview,Genres,OfficialRating,CommunityRating"},
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json().get("Items", [])
+
+    async def get_user_items_latest(self, user_id: str, limit: int = 16) -> list[dict]:
+        """Get latest added items for a user."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._base}/Users/{user_id}/Items/Latest",
+                params={"Limit": limit, "Fields": "Overview,Genres,OfficialRating,CommunityRating"},
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json() if isinstance(resp.json(), list) else []
+
+    async def get_user_items_played(self, user_id: str, limit: int = 20) -> list[dict]:
+        """Get recently played items sorted by DatePlayed."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._base}/Users/{user_id}/Items",
+                params={
+                    "SortBy": "DatePlayed",
+                    "SortOrder": "Descending",
+                    "Filters": "IsPlayed",
+                    "Recursive": "true",
+                    "Limit": limit,
+                    "IncludeItemTypes": "Movie,Series,Episode",
+                    "Fields": "Overview,Genres,OfficialRating,CommunityRating,SeriesName",
+                },
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json().get("Items", [])
+
+    async def get_similar_items(self, item_id: str, user_id: str, limit: int = 12) -> list[dict]:
+        """Get similar items from Jellyfin's built-in recommendation engine."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._base}/Items/{item_id}/Similar",
+                params={"UserId": user_id, "Limit": limit, "Fields": "PrimaryImageAspectRatio"},
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json().get("Items", [])

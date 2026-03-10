@@ -11,6 +11,7 @@ interface Props {
   tmdbId: number;
   title: string;
   mediaType: 'movie' | 'tv';
+  year?: number;
 }
 
 const DOWNLOADER_LABELS: Record<string, { label: string; icon: typeof Zap }> = {
@@ -103,7 +104,7 @@ function ReleaseRow({
   );
 }
 
-export function RequestButton({ tmdbId, title, mediaType }: Props) {
+export function RequestButton({ tmdbId, title, mediaType, year }: Props) {
   const mutation = useCreateRequest();
   const [requested, setRequested] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -112,8 +113,8 @@ export function RequestButton({ tmdbId, title, mediaType }: Props) {
   const acquisitionMode = 'download' as const;
 
   const searchQuery = useQuery({
-    queryKey: ['search-releases', title, mediaType],
-    queryFn: () => searchReleases(title, mediaType),
+    queryKey: ['search-releases', title, mediaType, year],
+    queryFn: () => searchReleases(title, mediaType, year),
     enabled: showModal,
     staleTime: 60_000,
   });

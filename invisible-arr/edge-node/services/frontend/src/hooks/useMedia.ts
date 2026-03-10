@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo, getTVSeasons, getTVSeasonDetail, deleteLibraryItem } from '@/api/media';
+import { searchTMDB, getTrending, getPopular, getTMDBDetail, getLatestMedia, getLibraryItems, getJellyfinItem, deleteJellyfinItem, getStorageInfo, getTVSeasons, getTVSeasonDetail, deleteLibraryItem, getJellyfinLibrary, getQuotaInfo } from '@/api/media';
 import type { DeleteMediaRequest } from '@/api/media';
+import { useAuthStore } from '@/stores/authStore';
 
 export function useTMDBSearch(query: string, page = 1) {
   return useQuery({
@@ -87,12 +88,33 @@ export function useTVSeasonDetail(tmdbId: number, seasonNumber: number) {
   });
 }
 
+export function useJellyfinLibrary(mediaType?: 'movie' | 'tv') {
+  const userId = useAuthStore((s) => s.jellyfinUserId);
+  return useQuery({
+    queryKey: ['jellyfin-library', mediaType, userId],
+    queryFn: () => getJellyfinLibrary(userId!, mediaType),
+    enabled: !!userId,
+    staleTime: 30_000,
+  });
+}
+
+export function useQuotaInfo() {
+  return useQuery({
+    queryKey: ['quota-info'],
+    queryFn: getQuotaInfo,
+    staleTime: 60_000,
+  });
+}
+
 export function useDeleteJellyfinItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => deleteJellyfinItem(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['library'] });
+      qc.invalidateQueries({ queryKey: ['jellyfin-library'] });
+      qc.invalidateQueries({ queryKey: ['quota-info'] });
+      qc.invalidateQueries({ queryKey: ['storage-info'] });
     },
   });
 }
@@ -103,6 +125,8 @@ export function useDeleteLibraryItem() {
     mutationFn: (req: DeleteMediaRequest) => deleteLibraryItem(req),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['library'] });
+      qc.invalidateQueries({ queryKey: ['jellyfin-library'] });
+      qc.invalidateQueries({ queryKey: ['quota-info'] });
       qc.invalidateQueries({ queryKey: ['storage-info'] });
     },
   });

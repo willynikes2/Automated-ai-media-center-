@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useJellyfinItem, useDeleteJellyfinItem } from '@/hooks/useMedia';
+import { useJellyfinItem, useDeleteLibraryItem } from '@/hooks/useMedia';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -46,9 +46,10 @@ export function LibraryItemPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: item, isLoading } = useJellyfinItem(id!);
-  const deleteMutation = useDeleteJellyfinItem();
+  const deleteMutation = useDeleteLibraryItem();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
+  const [deleteScope, setDeleteScope] = useState<'file' | 'season' | 'series'>('file');
 
   if (isLoading) return <FullSpinner />;
   if (!item) {
@@ -77,16 +78,31 @@ export function LibraryItemPage() {
   const runtimeMinutes = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10_000_000 / 60) : null;
   const overviewIsLong = (item.Overview?.length ?? 0) > 300;
 
+  const isMovie = item.Type === 'Movie';
+  const mediaType = isMovie ? 'movie' : 'tv';
+
   const handleDelete = () => {
-    deleteMutation.mutate(item.Id, {
-      onSuccess: () => {
-        toast(`Deleted "${title}"`, 'success');
-        navigate('/library');
+    const filePath = mediaSource?.Path;
+    if (!filePath) {
+      toast('No file path found for this item', 'error');
+      return;
+    }
+    deleteMutation.mutate(
+      {
+        file_path: filePath,
+        media_type: mediaType,
+        delete_scope: isMovie ? 'series' : deleteScope,
       },
-      onError: () => {
-        toast('Failed to delete item', 'error');
-      },
-    });
+      {
+        onSuccess: () => {
+          toast(`Deleted "${title}"`, 'success');
+          navigate('/library');
+        },
+        onError: () => {
+          toast('Failed to delete item', 'error');
+        },
+      }
+    );
     setShowDeleteModal(false);
   };
 
@@ -234,12 +250,35 @@ export function LibraryItemPage() {
       </div>
 
       {/* Delete confirmation */}
-      <Modal open={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete Item">
+      <Modal open={showDeleteModal} onClose={() => { setShowDeleteModal(false); setDeleteScope('file'); }} title="Delete Item">
         <p className="text-sm text-text-secondary mb-4">
           Are you sure you want to delete "{title}"? This will remove the file from disk and cannot be undone.
         </p>
+
+        {/* Scope selector for TV */}
+        {!isMovie && (
+          <div className="space-y-2 mb-4">
+            <p className="text-xs text-text-tertiary font-medium">Delete scope:</p>
+            <div className="flex gap-2">
+              {(['file', 'season', 'series'] as const).map((scope) => (
+                <button
+                  key={scope}
+                  onClick={() => setDeleteScope(scope)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    deleteScope === scope
+                      ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30'
+                      : 'bg-bg-tertiary text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  {scope === 'file' ? 'Episode' : scope === 'season' ? 'Season' : 'Series'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => { setShowDeleteModal(false); setDeleteScope('file'); }}>Cancel</Button>
           <Button onClick={handleDelete} loading={deleteMutation.isPending}>
             <Trash2 className="h-4 w-4" /> Delete
           </Button>

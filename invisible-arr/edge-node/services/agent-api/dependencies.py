@@ -91,3 +91,23 @@ async def check_storage_quota(user: User) -> None:
                 f"of {user.storage_quota_gb:.0f}GB. Free up space or upgrade your plan."
             ),
         )
+
+
+async def check_item_quota(user: User, media_type: str) -> None:
+    """Check if user has exceeded their item-count quota."""
+    if media_type == "movie":
+        if user.movie_quota == -1:
+            return
+        if user.movie_count >= user.movie_quota:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Movie quota reached ({user.movie_count}/{user.movie_quota}). Delete content or upgrade.",
+            )
+    else:
+        if user.tv_quota == -1:
+            return
+        if user.tv_count >= user.tv_quota:
+            raise HTTPException(
+                status_code=429,
+                detail=f"TV quota reached ({user.tv_count}/{user.tv_quota}). Delete content or upgrade.",
+            )

@@ -200,3 +200,27 @@ async def get_rate_count(user_id: str) -> int:
     key = f"{_RATE_LIMIT_PREFIX}{user_id}"
     val = await _safe_redis_op(r.get(key))
     return int(val) if val else 0
+
+
+# ---------------------------------------------------------------------------
+# Generic JSON cache
+# ---------------------------------------------------------------------------
+
+_CACHE_PREFIX = "invisiblearr:cache:"
+
+
+async def cache_get(key: str) -> dict | list | None:
+    """Get a cached JSON value. Returns None on miss."""
+    import json
+    r = await get_redis()
+    raw = await _safe_redis_op(r.get(f"{_CACHE_PREFIX}{key}"))
+    if raw is None:
+        return None
+    return json.loads(raw)
+
+
+async def cache_set(key: str, data: dict | list, ttl: int) -> None:
+    """Set a JSON value in cache with TTL in seconds."""
+    import json
+    r = await get_redis()
+    await _safe_redis_op(r.set(f"{_CACHE_PREFIX}{key}", json.dumps(data), ex=ttl))

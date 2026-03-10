@@ -10,8 +10,8 @@ from sqlalchemy import select
 
 from dependencies import (
     check_concurrent_jobs,
+    check_item_quota,
     check_rate_limit,
-    check_storage_quota,
     get_current_user,
 )
 from shared.config import get_config
@@ -34,7 +34,7 @@ async def create_request(
     # Enforce per-user limits
     await check_rate_limit(user)
     await check_concurrent_jobs(user)
-    await check_storage_quota(user)
+    await check_item_quota(user, body.media_type)
 
     async with get_session_factory()() as session:
         job = Job(
@@ -129,7 +129,7 @@ async def create_batch_request(
     # Check limits against total batch size
     await check_rate_limit(user)
     await check_concurrent_jobs(user)
-    await check_storage_quota(user)
+    await check_item_quota(user, body.media_type)
 
     created_jobs: list[JobResponse] = []
     async with get_session_factory()() as session:

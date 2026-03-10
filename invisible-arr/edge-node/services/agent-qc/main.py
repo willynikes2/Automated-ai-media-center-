@@ -8,11 +8,13 @@ failures with blacklisting and optional retry.
 from __future__ import annotations
 
 import asyncio
-import logging
+import os
 import signal
 import sys
 from pathlib import Path
 from uuid import UUID
+
+import sentry_sdk
 
 import httpx
 import redis.asyncio as aioredis
@@ -32,13 +34,20 @@ from shared.models import Blacklist, Job, JobEvent, JobState  # noqa: E402
 from qc import validate_file  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging & Sentry
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("agent-qc")
+from shared.logging import setup_logging  # noqa: E402
+
+_sentry_dsn = os.environ.get("SENTRY_DSN_BACKEND", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("ENV", "dev"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
+
+logger = setup_logging("agent-qc")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -116,9 +125,10 @@ async def _process_job(job_id_str: str, rds: aioredis.Redis) -> None:
                 logger.error("Job %s not found in database", job_id)
                 return
 
-            if job.state != JobState.VERIFYING:
+            if job.state not in (JobState.VERIFYING, JobState.IMPORTING,
+                                  JobState.VERIFYING.value, JobState.IMPORTING.value):
                 logger.warning(
-                    "Job %s is in state %s, expected VERIFYING -- skipping",
+                    "Job %s is in state %s, expected VERIFYING or IMPORTING -- skipping",
                     job_id,
                     job.state,
                 )
@@ -141,9 +151,9 @@ async def _process_job(job_id_str: str, rds: aioredis.Redis) -> None:
 
             if passed:
                 # ---- PASS ----
-                job.state = JobState.DONE
-                session.add(_make_event(job.id, JobState.DONE, reason))
-                logger.info("Job %s QC PASSED -- transitioning to DONE", job_id)
+                job.state = JobState.AVAILABLE
+                session.add(_make_event(job.id, JobState.AVAILABLE, reason))
+                logger.info("Job %s QC PASSED -- transitioning to AVAILABLE", job_id)
             else:
                 # ---- FAIL ----
                 logger.warning("Job %s QC FAILED: %s", job_id, reason)
@@ -228,6 +238,10 @@ async def _main() -> None:
         logger.exception("Failed to connect to Redis")
         raise
 
+    # Metrics server --------------------------------------------------------
+    from shared.metrics_server import start_metrics_server
+    metrics_runner = await start_metrics_server(port=9091)
+
     logger.info("Agent QC service started -- listening on %s", QC_QUEUE)
 
     try:
@@ -249,6 +263,7 @@ async def _main() -> None:
             except Exception:
                 logger.exception("Unhandled error processing job %s", job_id_str)
     finally:
+        await metrics_runner.cleanup()
         logger.info("Closing Redis connection")
         await rds.aclose()
 

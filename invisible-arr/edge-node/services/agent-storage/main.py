@@ -5,11 +5,12 @@ storage pressure for the edge node.
 """
 
 import asyncio
-import logging
 import os
 import signal
 import sys
 from types import FrameType
+
+import sentry_sdk
 
 from shared.database import get_session_factory, init_db
 from storage import run_storage_check
@@ -26,16 +27,21 @@ DATABASE_URL = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging & Sentry
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    stream=sys.stdout,
-)
-logger = logging.getLogger("agent-storage")
+from shared.logging import setup_logging
+
+_sentry_dsn = os.environ.get("SENTRY_DSN_BACKEND", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("ENV", "dev"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
+
+logger = setup_logging("agent-storage")
 
 # ---------------------------------------------------------------------------
 # Graceful shutdown
@@ -65,24 +71,31 @@ async def _main() -> None:
     init_db(DATABASE_URL)
     session_factory = get_session_factory()
 
-    # Run an immediate check on startup, then loop.
-    while not _shutdown_event.is_set():
-        try:
-            async with session_factory() as session:
-                await run_storage_check(MEDIA_PATH, session)
-                await session.commit()
-        except Exception:
-            logger.exception("Storage check failed — will retry next cycle.")
+    # Metrics server --------------------------------------------------------
+    from shared.metrics_server import start_metrics_server
+    metrics_runner = await start_metrics_server(port=9092)
 
-        # Wait for the next interval or until shutdown is requested.
-        try:
-            await asyncio.wait_for(
-                _shutdown_event.wait(),
-                timeout=CHECK_INTERVAL_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            # Normal — timeout means it's time for the next check.
-            pass
+    # Run an immediate check on startup, then loop.
+    try:
+        while not _shutdown_event.is_set():
+            try:
+                async with session_factory() as session:
+                    await run_storage_check(MEDIA_PATH, session)
+                    await session.commit()
+            except Exception:
+                logger.exception("Storage check failed — will retry next cycle.")
+
+            # Wait for the next interval or until shutdown is requested.
+            try:
+                await asyncio.wait_for(
+                    _shutdown_event.wait(),
+                    timeout=CHECK_INTERVAL_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Normal — timeout means it's time for the next check.
+                pass
+    finally:
+        await metrics_runner.cleanup()
 
     logger.info("Agent-Storage shut down cleanly.")
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 import uuid as _uuid
 from typing import Any
 
@@ -12,10 +14,18 @@ from sqlalchemy import select
 
 from shared.config import get_config
 from shared.database import get_session_factory
-from shared.models import Job, JobEvent, JobState
+from shared.models import Job, JobEvent, JobState, User
 from shared.radarr_client import RadarrClient
-from shared.redis_client import set_rdt_ready
+from shared.redis_client import set_rdt_ready, clear_download_progress
 from shared.sonarr_client import SonarrClient
+from shared.media_utils import trigger_jellyfin_refresh, register_content
+from shared.canonical import (
+    add_user_content,
+    check_canonical,
+    create_user_symlink,
+    increment_user_count,
+    register_canonical,
+)
 
 logger = logging.getLogger("agent-api.webhooks")
 router = APIRouter()
@@ -305,6 +315,28 @@ async def _match_webhook_to_job(
         arr_id = payload.get("series", {}).get("id")
         if arr_id is None:
             return None
+        # Try episode-level matching first for more precise correlation
+        episodes_payload = payload.get("episodes", [])
+        ep_num = episodes_payload[0].get("episodeNumber") if episodes_payload else None
+        season_num = episodes_payload[0].get("seasonNumber") if episodes_payload else None
+
+        if ep_num is not None and season_num is not None:
+            # Try to match a job for this specific episode
+            ep_stmt = (
+                select(Job)
+                .where(Job.sonarr_series_id == int(arr_id))
+                .where(Job.season == season_num)
+                .where(Job.episode == ep_num)
+                .where(Job.state.notin_(_TERMINAL_STATES))
+                .order_by(Job.created_at.desc())
+                .limit(1)
+            )
+            result = await session.execute(ep_stmt)
+            ep_match = result.scalar_one_or_none()
+            if ep_match:
+                return ep_match
+
+        # Fall back to series-level matching
         stmt = (
             select(Job)
             .where(Job.sonarr_series_id == int(arr_id))
@@ -328,6 +360,98 @@ def _extract_source_badge(payload: dict[str, Any]) -> str:
         return "Usenet"
     else:
         return "Torrent"
+
+
+async def _fulfill_sibling_jobs(
+    primary_job: Job,
+    source_file_path: str,
+    rel_path: str,
+    source: str,
+    session: Any,
+) -> None:
+    """Find other users' active jobs for the same Arr entity and hardlink the file.
+
+    When multiple users request the same movie/show, Radarr/Sonarr only has one
+    entry. This function finds sibling jobs (same radarr_movie_id or
+    sonarr_series_id, different user) and creates hardlinks so each user gets the
+    file in their own library folder without extra disk usage.
+    """
+    if source == "radarr" and primary_job.radarr_movie_id is not None:
+        arr_col = Job.radarr_movie_id
+        arr_id = primary_job.radarr_movie_id
+        media_subdir = "Movies"
+    elif source == "sonarr" and primary_job.sonarr_series_id is not None:
+        arr_col = Job.sonarr_series_id
+        arr_id = primary_job.sonarr_series_id
+        media_subdir = "TV"
+    else:
+        return
+
+    # Find sibling jobs: same arr entity, different user, still active
+    stmt = (
+        select(Job)
+        .where(arr_col == arr_id)
+        .where(Job.user_id != primary_job.user_id)
+        .where(Job.state.notin_(_TERMINAL_STATES))
+    )
+    result = await session.execute(stmt)
+    siblings = result.scalars().all()
+
+    if not siblings:
+        return
+
+    source_path = Path(source_file_path)
+    if not source_path.exists():
+        logger.warning("Source file not found for sibling hardlink: %s", source_file_path)
+        return
+
+    # We need user info to build destination paths
+    sibling_user_ids = [s.user_id for s in siblings]
+    user_stmt = select(User).where(User.id.in_(sibling_user_ids))
+    user_result = await session.execute(user_stmt)
+    users_by_id = {u.id: u for u in user_result.scalars().all()}
+
+    for sibling in siblings:
+        user = users_by_id.get(sibling.user_id)
+        if not user:
+            continue
+
+        try:
+            # Create symlink from sibling user's dir to canonical folder
+            canonical_folder = str(source_path.parent)
+            symlink_dest = create_user_symlink(
+                canonical_folder, str(user.id), primary_job.media_type,
+            )
+
+            # Track in user_content
+            try:
+                canonical = await check_canonical(session, primary_job.tmdb_id, primary_job.media_type)
+                if canonical:
+                    await add_user_content(
+                        session, str(user.id), canonical,
+                        job_id=str(sibling.id), symlink_path=symlink_dest,
+                    )
+                    await increment_user_count(session, user.id, primary_job.media_type)
+            except Exception:
+                logger.warning("Failed to track user_content for sibling job %s", sibling.id, exc_info=True)
+
+            # Mark sibling job as AVAILABLE
+            sibling.imported_path = rel_path
+            sibling.state = JobState.AVAILABLE.value
+            event = JobEvent(
+                job_id=sibling.id,
+                state=f"webhook:{source}:Download",
+                message=f"Symlinked from canonical library: {rel_path}",
+            )
+            session.add(event)
+            logger.info("Sibling job %s → AVAILABLE (symlink from job %s)", sibling.id, primary_job.id)
+
+            try:
+                await clear_download_progress(str(sibling.id))
+            except Exception:
+                pass
+        except OSError as exc:
+            logger.error("Failed to symlink for sibling job %s: %s", sibling.id, exc)
 
 
 async def _process_arr_webhook(
@@ -395,20 +519,64 @@ async def _process_arr_webhook(
                 job.arr_queue_id = int(queue_id) if str(queue_id).isdigit() else job.arr_queue_id
 
         elif event_type in ("Download", "DownloadFolderImported"):
-            if job.state in (
-                JobState.DOWNLOADING.value,
-                JobState.IMPORTING.value,
-                JobState.SEARCHING.value,
-            ):
-                job.state = JobState.IMPORTING.value
-                logger.info("Job %s → IMPORTING via %s %s", job.id, source, event_type)
-
             file_info = payload.get("movieFile") or payload.get("episodeFile") or {}
             rel_path = file_info.get("relativePath") or file_info.get("path")
             if rel_path:
                 job.imported_path = rel_path
 
-            # Signal RDT-ready so worker observe loop picks it up.
+            if job.state in (
+                JobState.DOWNLOADING.value,
+                JobState.IMPORTING.value,
+                JobState.SEARCHING.value,
+            ):
+                # Transition directly to AVAILABLE — file is imported by Arr
+                job.state = JobState.AVAILABLE.value
+                logger.info("Job %s → AVAILABLE via %s %s", job.id, source, event_type)
+
+                # Clear download progress tracking
+                try:
+                    await clear_download_progress(str(job.id))
+                except Exception:
+                    pass
+
+                # Register content in the shared library for dedup
+                full_file_path = file_info.get("path")
+                if full_file_path:
+                    try:
+                        await register_content(session, job, full_file_path)
+                    except Exception:
+                        logger.error("Failed to register content for job %s", job.id, exc_info=True)
+
+                    # Register in canonical library for cross-user dedup
+                    try:
+                        canonical_path = os.path.dirname(full_file_path)  # folder, not file
+                        canonical = await register_canonical(
+                            session, job.tmdb_id, job.media_type,
+                            title=job.title,
+                            canonical_path=canonical_path,
+                            radarr_id=job.radarr_movie_id,
+                            sonarr_id=job.sonarr_series_id,
+                        )
+                        # Track this user's reference
+                        await add_user_content(
+                            session, str(job.user_id), canonical,
+                            job_id=str(job.id), symlink_path=str(Path(full_file_path).parent),
+                        )
+                        await increment_user_count(session, job.user_id, job.media_type)
+                    except Exception:
+                        logger.warning("Failed to register canonical content for job %s", job.id, exc_info=True)
+
+                # Symlink/hardlink file to other users who requested the same content
+                if full_file_path and rel_path:
+                    try:
+                        await _fulfill_sibling_jobs(job, full_file_path, rel_path, source, session)
+                    except Exception:
+                        logger.error("Failed to fulfill sibling jobs for %s", job.id, exc_info=True)
+
+                # Trigger Jellyfin library refresh (best effort)
+                await trigger_jellyfin_refresh()
+
+            # Also signal RDT-ready for QC pipeline (if enabled)
             await set_rdt_ready(str(job.id), payload="webhook_import")
 
         elif event_type == "DownloadFailed":

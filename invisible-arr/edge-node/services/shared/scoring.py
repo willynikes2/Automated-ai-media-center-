@@ -73,12 +73,12 @@ def parse_release_title(title: str) -> ParsedRelease:
             p.audio = label
             break
 
-    # Banned tags (hard reject)
-    banned_tags = [r'\bCAM\b', r'\bTS\b', r'\bHDCAM\b', r'\bTELESYNC\b', r'\bHDTS\b']
-    for bt in banned_tags:
-        if re.search(bt, title, re.I):
-            p.banned = True
-            p.ban_reason = f"Banned tag: {bt}"
+    # Theater-quality tags (low quality but not banned — allows in-cinema releases)
+    theater_tags = [r'\bCAM\b', r'\bTS\b', r'\bHDCAM\b', r'\bTELESYNC\b', r'\bHDTS\b',
+                    r'\bTELECINE\b', r'\bTC\b', r'\bDVDSCR\b', r'\bSCR\b']
+    for tt in theater_tags:
+        if re.search(tt, title, re.I):
+            p.source = "CAM"
             break
 
     # TRaSH unwanted: LQ release groups
@@ -114,29 +114,47 @@ def _normalize_title(title: str) -> set[str]:
 def title_matches(release_title: str, canonical_title: str, year: int = 0) -> bool:
     """Check if a release title is relevant to the requested media.
 
-    Returns True if the release title contains all significant words from
-    the canonical title.  Rejects obvious mismatches like "Scream VI" when
-    requesting "Scream 7", or "Poseidon" when requesting "Pose".
+    Uses contiguous phrase matching: the canonical title tokens must appear
+    consecutively in the release title (with separators like dots/spaces/dashes).
+    This prevents "Scream 7" from matching "Scream VI ... AAC 7.1".
     """
-    # Normalize both titles to lowercase token sets
-    release_tokens = _normalize_title(release_title)
-    canonical_tokens = _normalize_title(canonical_title)
+    # Build a regex that matches the canonical title as a contiguous phrase
+    # "Scream 7" -> r'scream[\s.\-_]+7\b'
+    # "The Bride!" -> r'(the[\s.\-_]+)?bride\b'
+    canonical_clean = re.sub(r'[^\w\s]', '', canonical_title).strip()
+    tokens = canonical_clean.lower().split()
 
-    # Remove very short/common tokens that cause false matches
     noise = {'the', 'a', 'an', 'and', 'of', 'in', 'on', 'at', 'to', 'for', 'is', 'it', 'by'}
-    canonical_significant = canonical_tokens - noise
+    # Keep noise words if they're the only tokens, otherwise make them optional
+    significant = [t for t in tokens if t not in noise]
+    if not significant:
+        significant = tokens
 
-    if not canonical_significant:
-        return True  # safety: don't filter if no significant tokens
+    if not significant:
+        return True
 
-    # All significant canonical tokens must appear in the release title
-    matched = canonical_significant & release_tokens
-    if len(matched) < len(canonical_significant):
+    # Build phrase regex: tokens joined by flexible separators
+    sep = r'[\s.\-_]+'
+    parts = []
+    for t in tokens:
+        if t in noise:
+            parts.append(f'(?:{re.escape(t)}{sep})?')
+        else:
+            parts.append(re.escape(t) + r'\b')
+            parts.append(sep)
+    # Remove trailing separator
+    if parts and parts[-1] == sep:
+        parts.pop()
+
+    phrase_pattern = ''.join(parts)
+
+    release_lower = release_title.lower()
+    if not re.search(phrase_pattern, release_lower):
         return False
 
     # Year check: if the release contains a different 4-digit year, reject
     if year > 0:
-        release_years = {int(t) for t in release_tokens if t.isdigit() and len(t) == 4 and 1900 <= int(t) <= 2099}
+        release_years = {int(m) for m in re.findall(r'\b((?:19|20)\d{2})\b', release_title)}
         if release_years and year not in release_years:
             return False
 
@@ -174,7 +192,7 @@ def score_candidate(parsed: ParsedRelease, prefs: dict) -> int:
     src_scores = {
         "REMUX": 100, "BluRay": 90, "WEB-DL": 80, "WEB": 75,
         "WEBRip": 60, "BDRip": 55, "HDRip": 50, "HDTV": 40,
-        "DVDRip": 20, "unknown": 10,
+        "DVDRip": 20, "CAM": 5, "unknown": 10,
     }
     score += src_scores.get(parsed.source, 10)
 

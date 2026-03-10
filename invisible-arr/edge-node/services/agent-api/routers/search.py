@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from shared.config import get_config
 from shared.prowlarr_client import ProwlarrClient
-from shared.scoring import parse_release_title, score_candidate
+from shared.scoring import parse_release_title, score_candidate, title_matches
 
 logger = logging.getLogger("agent-api.search")
 router = APIRouter()
@@ -44,6 +44,7 @@ class SearchResponse(BaseModel):
 async def search_releases(
     query: str = Query(..., min_length=1),
     media_type: str = Query("movie", regex="^(movie|tv)$"),
+    year: int | None = Query(default=None),
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
 ):
     """Search Prowlarr for releases matching a query and return scored results.
@@ -74,11 +75,12 @@ async def search_releases(
         "max_movie_size_gb": config.default_max_movie_size_gb if media_type == "movie" else config.default_max_episode_size_gb,
     }
 
-    # Search Prowlarr
+    # Search Prowlarr — include year in query for better indexer results
+    search_query = f"{query} {year}" if year else query
     categories = [2000] if media_type == "movie" else [5000]
     try:
         async with ProwlarrClient(config.prowlarr_url, config.prowlarr_api_key) as prowlarr:
-            raw_results = await prowlarr.search(query=query, categories=categories)
+            raw_results = await prowlarr.search(query=search_query, categories=categories)
     except Exception as exc:
         logger.exception("Prowlarr search failed")
         return SearchResponse(
@@ -96,6 +98,10 @@ async def search_releases(
         parsed.seeders = r.get("seeders", 0)
         parsed.info_hash = r.get("infoHash", "")
         parsed.indexer = r.get("indexer", "")
+
+        # Filter out releases that don't match the query title
+        if not title_matches(r.get("title", ""), query, year=year or 0):
+            continue
 
         s = score_candidate(parsed, prefs)
         if s < 0:

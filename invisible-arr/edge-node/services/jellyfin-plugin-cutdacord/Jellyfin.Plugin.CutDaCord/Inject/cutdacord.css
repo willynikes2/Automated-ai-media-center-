@@ -705,7 +705,7 @@ h2.sectionTitle,
 
 .section0 .card.backdropCard .cardImageContainer,
 .libraryPage .card .cardImageContainer {
-  background: linear-gradient(135deg, #1a1a2e, #16213e) !important;
+  background-color: #1a1a2e;
 }
 
 /* -- Mobile Breakpoint ---------------------------------------------------- */

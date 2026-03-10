@@ -1,0 +1,68 @@
+groups:
+  - name: cutdacord_alerts
+    rules:
+      # 1. API error rate spike (>10% of requests returning 5xx over 5 min)
+      - alert: HighAPIErrorRate
+        expr: |
+          (
+            sum(rate(requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(requests_total[5m]))
+          ) > 0.10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API error rate above 10%"
+          description: "{{ $value | humanizePercentage }} of API requests returning 5xx over the last 5 minutes."
+
+      # 2. Job failure rate spike (>30% of completed jobs failing over 1 hour)
+      - alert: HighJobFailureRate
+        expr: |
+          (
+            sum(rate(job_completions_total{final_state="FAILED"}[1h]))
+            /
+            sum(rate(job_completions_total[1h]))
+          ) > 0.30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job failure rate above 30%"
+          description: "{{ $value | humanizePercentage }} of jobs failing over the last hour."
+
+      # 3. Service down (metrics endpoint unreachable)
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Prometheus cannot reach {{ $labels.instance }} for 2+ minutes."
+
+      # 4. API p95 latency above 5s
+      - alert: HighAPILatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(request_duration_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 5 seconds"
+          description: "p95 request latency is {{ $value | humanizeDuration }}."
+
+      # 5. No jobs processed in 2 hours (possible queue stall)
+      - alert: JobQueueStalled
+        expr: |
+          sum(increase(job_completions_total[2h])) == 0
+          and
+          sum(active_jobs) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No jobs completed in 2 hours despite active jobs"
+          description: "Jobs appear stalled — active jobs exist but none are completing."

@@ -87,6 +87,12 @@ class RadarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def update_movie(self, movie: dict) -> dict:
+        """Update a movie in Radarr (e.g., change quality profile)."""
+        resp = await self._client.put(f"/api/v3/movie/{movie['id']}", json=movie)
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_movie_by_tmdb(self, tmdb_id: int) -> dict | None:
         """Find an existing movie in Radarr by TMDB ID."""
         resp = await self._client.get("/api/v3/movie", params={"tmdbId": tmdb_id})

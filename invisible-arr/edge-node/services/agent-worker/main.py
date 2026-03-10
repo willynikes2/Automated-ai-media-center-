@@ -26,6 +26,7 @@ from shared.redis_client import dequeue_job, enqueue_job, get_redis  # noqa: E40
 from shared.models import JobState  # noqa: E402
 from monitor import monitor_downloads  # noqa: E402
 from worker import process_request, check_timeouts  # noqa: E402
+from gc_canonical import run_gc  # noqa: E402
 
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 TIMEOUT_CHECK_INTERVAL = 60  # Check every 60 seconds
@@ -83,6 +84,10 @@ async def _run() -> None:
         logger.exception("Failed to connect to Redis")
         raise
 
+    # Metrics server --------------------------------------------------------
+    from shared.metrics_server import start_metrics_server
+    metrics_runner = await start_metrics_server(port=9090)
+
     # Recover stale in-flight jobs from previous crash -----------------------
     await _recover_stale_jobs()
 
@@ -91,6 +96,7 @@ async def _run() -> None:
     monitor_task = asyncio.create_task(monitor_downloads(_shutdown_event))
     waiting_checker_task = asyncio.create_task(_check_waiting_jobs(_shutdown_event))
     timeout_checker_task = asyncio.create_task(_timeout_checker(_shutdown_event))
+    gc_task = asyncio.create_task(run_gc(_shutdown_event))
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
     active_tasks: set[asyncio.Task] = set()
 
@@ -142,12 +148,14 @@ async def _run() -> None:
     monitor_task.cancel()
     waiting_checker_task.cancel()
     timeout_checker_task.cancel()
-    for bg_task in (monitor_task, waiting_checker_task, timeout_checker_task):
+    gc_task.cancel()
+    for bg_task in (monitor_task, waiting_checker_task, timeout_checker_task, gc_task):
         try:
             await bg_task
         except asyncio.CancelledError:
             pass
 
+    await metrics_runner.cleanup()
     logger.info("Shutting down agent-worker")
     await redis.aclose()
     engine = get_engine()
@@ -168,6 +176,8 @@ async def _recover_stale_jobs() -> None:
 
     TRANSIENT_STATES = (
         JobState.SEARCHING.value,
+        JobState.DOWNLOADING.value,
+        JobState.IMPORTING.value,
     )
 
     factory = get_session_factory()

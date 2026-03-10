@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useLibrary, useStorageInfo, useDeleteLibraryItem } from '@/hooks/useMedia';
+import { useJellyfinLibrary, useQuotaInfo } from '@/hooks/useMedia';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Library, HardDrive, Film, Tv, Trash2 } from 'lucide-react';
-import type { LibraryItem, DeleteMediaRequest } from '@/api/media';
+import { Library, Film, Tv, Star } from 'lucide-react';
+import type { JellyfinLibraryItem } from '@/api/media';
 
 const tabs = [
   { key: 'all', label: 'All' },
@@ -14,135 +14,131 @@ const tabs = [
 
 type Tab = (typeof tabs)[number]['key'];
 
-function StorageBar({ usedGb, totalGb }: { usedGb: number; totalGb: number }) {
-  if (totalGb <= 0) return null;
-  const pct = Math.min(100, (usedGb / totalGb) * 100);
-  const color = pct > 90 ? 'bg-status-failed' : pct > 70 ? 'bg-yellow-500' : 'bg-status-available';
+function QuotaBar({ label, count, quota }: { label: string; count: number; quota: number }) {
+  if (quota === 0) return null;
+  const isUnlimited = quota === -1;
+  const pct = isUnlimited ? 0 : Math.min(100, (count / quota) * 100);
+  const color = pct > 90 ? 'bg-status-failed' : pct > 70 ? 'bg-yellow-500' : 'bg-accent';
 
   return (
-    <div className="flex items-center gap-3">
-      <HardDrive className="h-4 w-4 text-text-tertiary shrink-0" />
-      <div className="flex-1 h-2 bg-bg-tertiary rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-text-tertiary w-16 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
+        {!isUnlimited && (
+          <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+        )}
       </div>
-      <span className="text-xs text-text-secondary whitespace-nowrap">
-        {usedGb.toFixed(0)} / {totalGb.toFixed(0)} GB ({pct.toFixed(0)}%)
+      <span className="text-text-secondary whitespace-nowrap">
+        {count}{isUnlimited ? '' : ` / ${quota}`}
       </span>
     </div>
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes <= 0) return '';
-  const gb = bytes / (1024 ** 3);
-  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
-}
-
-function MediaCard({ item, onDelete }: { item: LibraryItem; onDelete: (item: LibraryItem) => void }) {
-  const isMovie = item.media_type === 'movie';
-  const Icon = isMovie ? Film : Tv;
+function PosterCard({ item }: { item: JellyfinLibraryItem }) {
+  const imgTag = item.ImageTags?.Primary;
+  const poster = imgTag ? `/jellyfin/Items/${item.Id}/Images/Primary?maxHeight=450&tag=${imgTag}` : null;
+  const isMovie = item.Type === 'Movie';
 
   return (
-    <div className="group relative rounded-xl overflow-hidden ring-1 ring-white/5 hover:ring-accent/30 transition-all">
-      <Link
-        to={`/search?q=${encodeURIComponent(item.title)}`}
-        className="block"
-      >
-        <div className="relative aspect-[2/3] bg-bg-tertiary flex items-center justify-center">
-          <Icon className="h-12 w-12 text-text-tertiary/30" />
-          {item.year && (
-            <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white bg-accent/80">
-              {item.year}
-            </span>
+    <Link
+      to={`/library/${item.Id}`}
+      className="group relative rounded-xl overflow-hidden ring-1 ring-white/5 hover:ring-accent/40 hover:scale-[1.02] transition-all duration-200"
+    >
+      <div className="relative aspect-[2/3] bg-bg-tertiary">
+        {poster ? (
+          <img
+            src={poster}
+            alt={item.Name}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            {isMovie ? <Film className="h-12 w-12 text-text-tertiary/30" /> : <Tv className="h-12 w-12 text-text-tertiary/30" />}
+          </div>
+        )}
+
+        {/* Hover overlay with info */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+
+        {/* Bottom info on hover */}
+        <div className="absolute bottom-0 left-0 right-0 p-2.5 translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-200">
+          {item.CommunityRating != null && (
+            <div className="flex items-center gap-1 mb-1">
+              <Star className="h-3 w-3 text-yellow-400 fill-yellow-400" />
+              <span className="text-xs text-white/90 font-medium">{item.CommunityRating.toFixed(1)}</span>
+            </div>
+          )}
+          {item.ProductionYear && (
+            <span className="text-xs text-white/70">{item.ProductionYear}</span>
           )}
         </div>
-        <div className="p-2">
-          <h3 className="text-sm font-medium truncate">{item.title}</h3>
-          <div className="flex items-center gap-2">
-            <p className="text-xs text-text-tertiary capitalize">{item.media_type}</p>
-            {item.size_bytes > 0 && <p className="text-[10px] text-text-tertiary">{formatSize(item.size_bytes)}</p>}
-          </div>
-          <p className="text-[10px] text-text-tertiary/60 truncate mt-0.5">{item.file_name}</p>
+
+        {/* Type badge */}
+        <div className="absolute top-1.5 right-1.5">
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold text-white/90 bg-black/50 backdrop-blur-sm">
+            {isMovie ? 'MOVIE' : 'TV'}
+          </span>
         </div>
-      </Link>
-      {/* Delete overlay */}
-      <button
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(item); }}
-        className="absolute top-1.5 left-1.5 p-1.5 rounded-lg bg-black/60 text-white/60 hover:text-red-400 hover:bg-black/80 opacity-0 group-hover:opacity-100 transition-all"
-        title="Delete"
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
+      </div>
+
+      {/* Title below poster */}
+      <div className="p-2 bg-bg-secondary">
+        <h3 className="text-sm font-medium truncate">{item.Name}</h3>
+      </div>
+    </Link>
   );
 }
 
 export function LibraryPage() {
   const [tab, setTab] = useState<Tab>('all');
-  const { data: storageData } = useStorageInfo();
   const mediaType = tab === 'all' ? undefined : (tab as 'movie' | 'tv');
-  const { data, isLoading } = useLibrary(mediaType);
-  const deleteMutation = useDeleteLibraryItem();
-  const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
-  const [deleteScope, setDeleteScope] = useState<'file' | 'season' | 'series'>('file');
+  const { data, isLoading } = useJellyfinLibrary(mediaType);
+  const { data: quota } = useQuotaInfo();
 
-  const items = data?.items ?? [];
-  const moviesCount = data?.movies_count ?? 0;
-  const tvCount = data?.tv_count ?? 0;
-
-  const handleDelete = () => {
-    if (!deleteTarget) return;
-    deleteMutation.mutate(
-      {
-        file_path: deleteTarget.file_path,
-        media_type: deleteTarget.media_type,
-        delete_scope: deleteTarget.media_type === 'movie' ? 'series' : deleteScope,
-      },
-      {
-        onSuccess: (res) => {
-          setDeleteTarget(null);
-          setDeleteScope('file');
-        },
-      }
-    );
-  };
-
-  const openDeleteModal = (item: LibraryItem) => {
-    setDeleteTarget(item);
-    setDeleteScope(item.media_type === 'movie' ? 'file' : 'file');
-  };
+  const items = data?.Items ?? [];
+  const movieCount = tab === 'all' && data
+    ? items.filter((i) => i.Type === 'Movie').length
+    : undefined;
+  const tvCount = tab === 'all' && data
+    ? items.filter((i) => i.Type === 'Series').length
+    : undefined;
 
   return (
     <div className="px-4 md:px-8 py-6">
       <h1 className="text-2xl font-bold mb-1">My Library</h1>
       <p className="text-sm text-text-secondary mb-4">Your personal media collection.</p>
 
-      {/* Storage bar */}
-      {storageData && (
-        <div className="mb-4">
-          <StorageBar usedGb={storageData.used_gb} totalGb={storageData.total_gb} />
+      {/* Quota bars */}
+      {quota && (
+        <div className="mb-5 space-y-1.5 max-w-sm">
+          <QuotaBar label="Movies" count={quota.movie_count} quota={quota.movie_quota} />
+          <QuotaBar label="TV Shows" count={quota.tv_count} quota={quota.tv_quota} />
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
-        <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit">
-          {tabs.map((t) => {
-            const count = t.key === 'all' ? moviesCount + tvCount : t.key === 'movie' ? moviesCount : tvCount;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  tab === t.key ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {t.label}
-                {count > 0 && <span className="ml-1 text-xs opacity-70">({count})</span>}
-              </button>
-            );
-          })}
-        </div>
+      <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit mb-6">
+        {tabs.map((t) => {
+          const count = t.key === 'all'
+            ? items.length
+            : t.key === 'movie'
+            ? (movieCount ?? 0)
+            : (tvCount ?? 0);
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                tab === t.key ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {t.label}
+              {count > 0 && <span className="ml-1 text-xs opacity-70">({count})</span>}
+            </button>
+          );
+        })}
       </div>
 
       {isLoading ? (
@@ -154,71 +150,10 @@ export function LibraryPage() {
           description="Request something from Discover to build your library."
         />
       ) : (
-        <>
-          <p className="text-xs text-text-tertiary mb-3">{items.length} items</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {items.map((item) => (
-              <MediaCard key={item.file_path} item={item} onDelete={openDeleteModal} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* Delete confirmation modal */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-bg-secondary border border-white/10 rounded-xl w-full max-w-sm shadow-2xl">
-            <div className="p-4 border-b border-white/5">
-              <h3 className="text-lg font-semibold text-white">Delete Media</h3>
-            </div>
-            <div className="p-4 space-y-3">
-              <p className="text-sm text-text-secondary">
-                Delete <span className="text-white font-medium">"{deleteTarget.title}"</span>?
-              </p>
-              <p className="text-xs text-text-tertiary">
-                {formatSize(deleteTarget.size_bytes)} will be freed. This cannot be undone.
-              </p>
-
-              {/* Scope selector for TV */}
-              {deleteTarget.media_type === 'tv' && (
-                <div className="space-y-2 pt-1">
-                  <p className="text-xs text-text-tertiary font-medium">Delete scope:</p>
-                  <div className="flex gap-2">
-                    {(['file', 'season', 'series'] as const).map((scope) => (
-                      <button
-                        key={scope}
-                        onClick={() => setDeleteScope(scope)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                          deleteScope === scope
-                            ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30'
-                            : 'bg-bg-tertiary text-text-secondary hover:text-text-primary'
-                        }`}
-                      >
-                        {scope === 'file' ? 'Episode' : scope === 'season' ? 'Season' : 'Series'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  onClick={() => { setDeleteTarget(null); setDeleteScope('file'); }}
-                  className="px-4 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary bg-bg-tertiary hover:bg-bg-tertiary/80 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDelete}
-                  disabled={deleteMutation.isPending}
-                  className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 transition-colors flex items-center gap-2"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-                </button>
-              </div>
-            </div>
-          </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
+          {items.map((item) => (
+            <PosterCard key={item.Id} item={item} />
+          ))}
         </div>
       )}
     </div>

@@ -5,18 +5,36 @@ and dynamic playlist generation for IPTV clients.
 """
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from starlette.responses import Response
 
 from shared.config import get_config
 from shared.database import init_db, get_engine, Base
+from shared.middleware import CorrelationMiddleware
 from routers import sources, channels, playlist
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Sentry
+# ---------------------------------------------------------------------------
+
+_sentry_dsn = os.environ.get("SENTRY_DSN_BACKEND", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.environ.get("ENV", "dev"),
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -78,7 +96,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# Middleware
+app.add_middleware(CorrelationMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -96,6 +115,12 @@ app.include_router(playlist.router)
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health", tags=["health"])

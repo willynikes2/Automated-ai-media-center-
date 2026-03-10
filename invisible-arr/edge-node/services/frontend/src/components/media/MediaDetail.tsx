@@ -166,7 +166,7 @@ export function MediaDetail({ detail, type }: Props) {
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 flex-wrap">
-              <RequestButton tmdbId={detail.id} title={title} mediaType={type} />
+              <RequestButton tmdbId={detail.id} title={title} mediaType={type} year={parseInt(year) || undefined} />
               {hasTrailerVideos && (
                 <Button
                   variant="secondary"

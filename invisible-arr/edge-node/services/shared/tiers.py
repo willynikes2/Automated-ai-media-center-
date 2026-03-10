@@ -9,6 +9,8 @@ TIER_LIMITS: dict[str, dict] = {
         "max_requests_per_day": 10,
         "max_movie_size_gb": 3.0,
         "max_episode_size_gb": 1.0,
+        "movie_quota": 50,
+        "tv_quota": 25,
         "features": ["download"],
     },
     "pro": {
@@ -19,6 +21,8 @@ TIER_LIMITS: dict[str, dict] = {
         "max_requests_per_day": 25,
         "max_movie_size_gb": 8.0,
         "max_episode_size_gb": 3.0,
+        "movie_quota": 200,
+        "tv_quota": 100,
         "features": ["download", "stream", "iptv"],
     },
     "family": {
@@ -29,6 +33,8 @@ TIER_LIMITS: dict[str, dict] = {
         "max_requests_per_day": 50,
         "max_movie_size_gb": 15.0,
         "max_episode_size_gb": 5.0,
+        "movie_quota": 500,
+        "tv_quota": 250,
         "features": ["download", "stream", "iptv", "usenet"],
     },
     "power": {
@@ -39,6 +45,8 @@ TIER_LIMITS: dict[str, dict] = {
         "max_requests_per_day": -1,  # unlimited
         "max_movie_size_gb": 50.0,
         "max_episode_size_gb": 10.0,
+        "movie_quota": -1,  # unlimited
+        "tv_quota": -1,  # unlimited
         "features": ["download", "stream", "iptv", "usenet", "admin"],
     },
 }

@@ -5,7 +5,7 @@ import secrets
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Index, String, func
+from sqlalchemy import BigInteger, Integer, JSON, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.database import Base
@@ -29,24 +29,46 @@ def _new_uuid() -> uuid.UUID:
 
 
 class JobState(str, enum.Enum):
-    # ── Active pipeline states ──
-    CREATED = "CREATED"
-    SEARCHING = "SEARCHING"          # Added to Arr, search triggered
-    DOWNLOADING = "DOWNLOADING"      # Arr grabbed release, download in progress
-    IMPORTING = "IMPORTING"          # Download complete, Arr organizing file
-    VERIFYING = "VERIFYING"          # QC running
-    DONE = "DONE"
-    # ── Waiting / problem states ──
-    MONITORED = "MONITORED"          # Waiting for release
-    INVESTIGATING = "INVESTIGATING"  # Diagnostic engine working on a problem
-    UNAVAILABLE = "UNAVAILABLE"      # Exhausted all options
-    FAILED = "FAILED"                # Internal — frontend maps to INVESTIGATING or UNAVAILABLE
+    # Primary states (user-facing)
+    REQUESTED = "REQUESTED"
+    SEARCHING = "SEARCHING"
+    DOWNLOADING = "DOWNLOADING"
+    IMPORTING = "IMPORTING"
+    AVAILABLE = "AVAILABLE"
+    WAITING = "WAITING"
+    FAILED = "FAILED"
     DELETED = "DELETED"
-    # ── Legacy (DB compat with existing rows) ──
+
+    # Legacy — kept for DB compat, mapped on read
+    CREATED = "CREATED"
     RESOLVING = "RESOLVING"
     ADDING = "ADDING"
     SELECTED = "SELECTED"
     ACQUIRING = "ACQUIRING"
+    VERIFYING = "VERIFYING"
+    DONE = "DONE"
+    MONITORED = "MONITORED"
+    INVESTIGATING = "INVESTIGATING"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+_STATE_MAP = {
+    "CREATED": "REQUESTED",
+    "RESOLVING": "SEARCHING",
+    "ADDING": "SEARCHING",
+    "SELECTED": "SEARCHING",
+    "ACQUIRING": "DOWNLOADING",
+    "VERIFYING": "IMPORTING",
+    "DONE": "AVAILABLE",
+    "MONITORED": "WAITING",
+    "INVESTIGATING": "SEARCHING",
+    "UNAVAILABLE": "FAILED",
+}
+
+
+def normalize_state(state: str) -> str:
+    """Map legacy states to v2 states."""
+    return _STATE_MAP.get(state, state)
 
 
 class UserRole(str, enum.Enum):
@@ -102,6 +124,10 @@ class User(Base):
     requests_today: Mapped[int] = mapped_column(default=0)
     requests_reset_at: Mapped[datetime | None] = mapped_column(nullable=True)
     setup_complete: Mapped[bool] = mapped_column(default=False)
+    movie_quota: Mapped[int] = mapped_column(default=50)
+    movie_count: Mapped[int] = mapped_column(default=0)
+    tv_quota: Mapped[int] = mapped_column(default=25)
+    tv_count: Mapped[int] = mapped_column(default=0)
     last_login: Mapped[datetime | None] = mapped_column(nullable=True)
     invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
@@ -145,7 +171,7 @@ class Job(Base):
     query: Mapped[str | None] = mapped_column(String(500), default=None)
     season: Mapped[int | None] = mapped_column(default=None)
     episode: Mapped[int | None] = mapped_column(default=None)
-    state: Mapped[str] = mapped_column(String(50), default=JobState.CREATED)
+    state: Mapped[str] = mapped_column(String(50), default=JobState.REQUESTED)
     selected_candidate: Mapped[dict | None] = mapped_column(type_=JSON, default=None)
     rd_torrent_id: Mapped[str | None] = mapped_column(String(255), default=None)
     imported_path: Mapped[str | None] = mapped_column(String(1000), default=None)
@@ -171,7 +197,7 @@ class JobEvent(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"))
     state: Mapped[str] = mapped_column(String(50))
-    message: Mapped[str] = mapped_column(String(2000))
+    message: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[dict | None] = mapped_column(type_=JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
 
@@ -275,3 +301,74 @@ class BugReport(Base):
     status: Mapped[str] = mapped_column(String(20), default=BugReportStatus.OPEN)
     admin_notes: Mapped[str | None] = mapped_column(String(5000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+
+
+class ContentLibrary(Base):
+    """Registry of all downloaded content, keyed by TMDB ID.
+
+    Used to deduplicate downloads across users: if content already exists,
+    hardlink it instead of re-downloading.
+    """
+    __tablename__ = "content_library"
+    __table_args__ = (
+        UniqueConstraint("tmdb_id", "media_type", "season", "episode", name="uq_content_identity"),
+        Index("ix_content_library_tmdb_id", "tmdb_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    tmdb_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(10), nullable=False)  # "movie" or "tv"
+    title: Mapped[str | None] = mapped_column(String(500))
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)  # absolute path to canonical file
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    quality: Mapped[str | None] = mapped_column(String(50), nullable=True)  # e.g. "WEBDL-1080p"
+    codec: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "x264", "x265"
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+
+
+class CanonicalContent(Base):
+    """Canonical library — one copy of each piece of content, shared across users."""
+    __tablename__ = "canonical_content"
+    __table_args__ = (
+        UniqueConstraint("tmdb_id", "media_type", name="uq_canonical_tmdb"),
+        Index("ix_canonical_content_tmdb_id", "tmdb_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    tmdb_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(500))
+    canonical_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    quality: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    codec: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    radarr_id: Mapped[int | None] = mapped_column(nullable=True)
+    sonarr_id: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+    gc_eligible_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    user_refs: Mapped[list["UserContent"]] = relationship(back_populates="canonical", lazy="noload")
+
+
+class UserContent(Base):
+    """Maps users to canonical content — tracks who has what + reference counting for GC."""
+    __tablename__ = "user_content"
+    __table_args__ = (
+        UniqueConstraint("user_id", "canonical_content_id", name="uq_user_canonical"),
+        Index("ix_user_content_user_id", "user_id"),
+        Index("ix_user_content_canonical_id", "canonical_content_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    canonical_content_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("canonical_content.id"), nullable=False)
+    symlink_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    added_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+    removed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    canonical: Mapped["CanonicalContent"] = relationship(back_populates="user_refs")

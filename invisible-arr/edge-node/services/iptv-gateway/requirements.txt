@@ -7,3 +7,5 @@ pydantic-settings>=2.7.0
 redis>=5.2.0
 httpx>=0.28.0
 lxml>=5.0.0
+sentry-sdk[pure_eval]
+prometheus-client

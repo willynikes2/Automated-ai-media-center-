@@ -1,5 +1,9 @@
+import { useState } from 'react';
 import { useTrending, usePopular } from '@/hooks/useMedia';
+import { useProviders, useCatalogRows } from '@/hooks/useCatalog';
 import { MediaRow } from '@/components/media/MediaGrid';
+import { ProviderChips } from '@/components/catalog/ProviderChips';
+import { CatalogRow } from '@/components/catalog/CatalogRow';
 import { Button } from '@/components/ui/Button';
 import { FullSpinner } from '@/components/ui/Spinner';
 import { backdropUrl } from '@/api/client';
@@ -49,26 +53,60 @@ function HeroSection({ item }: { item: TMDBResult }) {
   );
 }
 
-export function DiscoverPage() {
-  const { data: trendingMovies, isLoading: loadingTM } = useTrending('movie');
+function AllContent() {
+  const { data: trendingMovies, isLoading } = useTrending('movie');
   const { data: trendingTV } = useTrending('tv');
   const { data: popularMovies } = usePopular('movie');
   const { data: popularTV } = usePopular('tv');
 
-  if (loadingTM) return <FullSpinner />;
-
-  const hero = trendingMovies?.[0];
+  if (isLoading) return <FullSpinner />;
 
   return (
-    <div>
-      {hero && <HeroSection item={hero} />}
-
+    <>
+      {trendingMovies?.[0] && <HeroSection item={trendingMovies[0]} />}
       <div className="px-4 md:px-8 space-y-2">
         <MediaRow title="Trending Movies" items={trendingMovies?.slice(1) ?? []} />
         <MediaRow title="Trending TV Shows" items={trendingTV ?? []} />
         <MediaRow title="Popular Movies" items={popularMovies ?? []} />
         <MediaRow title="Popular TV Shows" items={popularTV ?? []} />
       </div>
+    </>
+  );
+}
+
+function ProviderContent({ providerId }: { providerId: number }) {
+  const { data: rows, isLoading } = useCatalogRows(providerId);
+
+  if (isLoading) return <FullSpinner />;
+  if (!rows?.length) return <p className="px-8 text-text-secondary">No content found.</p>;
+
+  return (
+    <div className="px-4 md:px-8 space-y-2 mt-4">
+      {rows.map((row, i) => (
+        <CatalogRow key={row.slug} row={row} providerId={providerId} eager={i < 3} />
+      ))}
+      <p className="text-center text-xs text-text-tertiary py-4">
+        Data provided by TMDB
+      </p>
+    </div>
+  );
+}
+
+export function DiscoverPage() {
+  const [selectedProvider, setSelectedProvider] = useState<number | null>(null);
+  const { data: providers } = useProviders();
+
+  return (
+    <div>
+      <div className="pt-4 mb-4">
+        <ProviderChips
+          providers={providers ?? []}
+          selected={selectedProvider}
+          onSelect={setSelectedProvider}
+        />
+      </div>
+
+      {selectedProvider === null ? <AllContent /> : <ProviderContent providerId={selectedProvider} />}
     </div>
   );
 }

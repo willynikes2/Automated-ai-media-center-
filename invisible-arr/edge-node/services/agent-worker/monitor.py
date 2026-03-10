@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -17,12 +18,20 @@ from shared.database import get_session_factory
 from shared.models import Job, JobEvent, JobState
 from shared.radarr_client import RadarrClient
 from shared.sonarr_client import SonarrClient
-from shared.redis_client import set_rdt_ready, set_download_progress
+from shared.redis_client import set_download_progress, clear_download_progress
+from shared.media_utils import (
+    trigger_jellyfin_refresh,
+    get_imported_path_from_arr,
+    get_absolute_path_from_arr,
+    register_content,
+)
 
 logger = logging.getLogger("agent-worker.monitor")
 
 HEALTH_CHECK_INTERVAL = 60  # seconds between checks
 STALE_THRESHOLD = 600       # 10 min without update = check on it
+MAX_DOWNLOAD_HOURS = int(os.environ.get("MAX_DOWNLOAD_HOURS", "6"))  # max time in DOWNLOADING
+MAX_IMPORT_ERROR_MINUTES = 30  # auto-fail after this many min stuck with import errors
 
 
 async def monitor_downloads(shutdown_event: asyncio.Event) -> None:
@@ -104,10 +113,41 @@ async def _check_job_health(session, job: Job) -> None:
             pass
 
     if has_file:
-        logger.info("Health check: job %s (%s) has file — signaling completion", job.id, job.title)
-        await set_rdt_ready(str(job.id), payload="health_check_found_file")
+        logger.info("Health check: job %s (%s) has file — transitioning to AVAILABLE", job.id, job.title)
+
+        # Extract imported_path from Arr API
+        imported_path = await get_imported_path_from_arr(job)
+
+        # Transition to AVAILABLE
+        job.state = JobState.AVAILABLE.value
+        if imported_path:
+            job.imported_path = imported_path
         job.updated_at = datetime.utcnow()
         session.add(job)
+
+        session.add(JobEvent(
+            job_id=job.id,
+            state=JobState.AVAILABLE.value,
+            message=f"File detected by health check (missed webhook recovery). Path: {imported_path or 'unknown'}",
+        ))
+
+        # Register content in shared library for dedup
+        try:
+            abs_path = await get_absolute_path_from_arr(job)
+            if abs_path:
+                await register_content(session, job, abs_path)
+        except Exception:
+            logger.error("Failed to register content for job %s", job.id, exc_info=True)
+
+        # Clear download progress tracking
+        try:
+            await clear_download_progress(str(job.id))
+        except Exception:
+            pass
+
+        # Trigger Jellyfin library refresh (best effort)
+        await trigger_jellyfin_refresh()
+
         return
 
     # Check 2: Is there a queue item with progress?
@@ -131,10 +171,43 @@ async def _check_job_health(session, job: Job) -> None:
         pass
 
     if queue_item:
-        # Download is in progress — update progress and touch timestamp
+        # Check for queue error states (import failures, missing files, etc.)
+        tracked_status = queue_item.get("trackedDownloadStatus", "").lower()
+        tracked_state = queue_item.get("trackedDownloadState", "").lower()
+        status_msgs = queue_item.get("statusMessages", [])
+
         size = queue_item.get("size", 0)
         sizeleft = queue_item.get("sizeleft", 0)
         pct = max(0, min(100, int(((size - sizeleft) / size) * 100))) if size > 0 else 0
+
+        if tracked_status in ("warning", "error") and pct >= 100:
+            # Download complete but import failing (e.g., missing files, path not found)
+            error_details = "; ".join(
+                msg.get("title", "") + ": " + ", ".join(msg.get("messages", []))
+                for msg in status_msgs
+            ) if status_msgs else f"Queue item status: {tracked_status}"
+
+            logger.warning(
+                "Health check: job %s (%s) stuck at %d%% with %s: %s",
+                job.id, job.title, pct, tracked_status, error_details[:200],
+            )
+
+            # Check how long it's been stuck — auto-fail after MAX_IMPORT_ERROR_MINUTES
+            if job.updated_at and (datetime.utcnow() - job.updated_at).total_seconds() > MAX_IMPORT_ERROR_MINUTES * 60:
+                job.state = JobState.FAILED.value
+                session.add(JobEvent(
+                    job_id=job.id,
+                    state=JobState.FAILED.value,
+                    message=f"Import stuck for {MAX_IMPORT_ERROR_MINUTES}+ min: {error_details[:200]}",
+                ))
+                logger.error("Health check: auto-failing job %s after %d min stuck import", job.id, MAX_IMPORT_ERROR_MINUTES)
+            else:
+                # Touch timestamp but warn
+                job.updated_at = datetime.utcnow()
+            session.add(job)
+            return
+
+        # Normal download in progress — update progress
         await set_download_progress(str(job.id), pct, queue_item.get("title", ""))
 
         # Update state if still in SEARCHING/legacy states
@@ -147,12 +220,25 @@ async def _check_job_health(session, job: Job) -> None:
                 message=f"Download detected by health check ({pct}%)",
             ))
 
+        # Check max download duration
+        if job.state == JobState.DOWNLOADING.value and job.created_at:
+            hours_elapsed = (datetime.utcnow() - job.created_at).total_seconds() / 3600
+            if hours_elapsed > MAX_DOWNLOAD_HOURS:
+                job.state = JobState.FAILED.value
+                session.add(JobEvent(
+                    job_id=job.id,
+                    state=JobState.FAILED.value,
+                    message=f"Download timed out after {hours_elapsed:.1f} hours (max {MAX_DOWNLOAD_HOURS}h)",
+                ))
+                logger.error("Health check: job %s timed out after %.1f hours", job.id, hours_elapsed)
+                session.add(job)
+                return
+
         job.updated_at = datetime.utcnow()
         session.add(job)
         logger.info("Health check: job %s (%s) downloading at %d%%", job.id, job.title, pct)
     else:
         # No queue item, no file — just touch timestamp so we don't spam
-        # The worker's _observe_until_done handles diagnostics
         job.updated_at = datetime.utcnow()
         session.add(job)
         logger.debug("Health check: job %s (%s) — no queue item, no file", job.id, job.title)
