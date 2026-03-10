@@ -372,3 +372,54 @@ class UserContent(Base):
     removed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     canonical: Mapped["CanonicalContent"] = relationship(back_populates="user_refs")
+
+
+# ---------------------------------------------------------------------------
+# QA Swarm Models
+# ---------------------------------------------------------------------------
+
+
+class QARun(Base):
+    __tablename__ = "qa_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    triggered_by: Mapped[str] = mapped_column(String(50), default="manual")
+    mode: Mapped[str] = mapped_column(String(20))
+    started_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    total_scenarios: Mapped[int] = mapped_column(default=0)
+    passed: Mapped[int] = mapped_column(default=0)
+    failed: Mapped[int] = mapped_column(default=0)
+    errored: Mapped[int] = mapped_column(default=0)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    test_user_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    results: Mapped[list["QAResult"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+
+
+class QAResult(Base):
+    __tablename__ = "qa_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("qa_runs.id", ondelete="CASCADE"))
+    persona: Mapped[str] = mapped_column(String(50))
+    scenario_name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20))
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    correlation_ids: Mapped[dict] = mapped_column(JSON, default=list)
+    screenshots: Mapped[dict] = mapped_column(JSON, default=list)
+    github_issue_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now())
+
+    run: Mapped["QARun"] = relationship(back_populates="results")
+
+
+class MetricsSnapshot(Base):
+    __tablename__ = "metrics_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    snapshot_at: Mapped[datetime] = mapped_column(default=_utcnow, server_default=func.now(), index=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    overall_status: Mapped[str] = mapped_column(String(20))

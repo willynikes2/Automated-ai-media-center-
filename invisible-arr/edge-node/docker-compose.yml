@@ -380,6 +380,12 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
       - GF_SERVER_ROOT_URL=https://status.${DOMAIN:-localhost}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=smtp.gmail.com:587
+      - GF_SMTP_USER=${GMAIL_ADDRESS}
+      - GF_SMTP_PASSWORD=${GMAIL_APP_PASSWORD}
+      - GF_SMTP_FROM_ADDRESS=${GMAIL_ADDRESS}
+      - GF_SMTP_FROM_NAME=CutDaCord Alerts
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -599,6 +605,34 @@ services:
       - iptv
     networks:
       - internal
+
+  qa-swarm:
+    build:
+      context: ./services/qa-swarm
+    container_name: qa-swarm
+    restart: "no"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - API_BASE_URL=http://agent-api:8880
+      - FRONTEND_URL=http://automedia-frontend:80
+      - IPTV_BASE_URL=http://iptv-gateway:8881
+      - PROMETHEUS_URL=http://prometheus:9090
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_REPO=${GITHUB_REPO:-}
+      - ADMIN_API_KEY=${QA_ADMIN_API_KEY:-}
+    mem_limit: 512m
+    cpus: 1.0
+    volumes:
+      - ./services/shared:/app/shared:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    networks:
+      - internal
+    profiles:
+      - qa
 
 networks:
   internal:

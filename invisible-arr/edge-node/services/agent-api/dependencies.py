@@ -50,10 +50,11 @@ async def get_current_user(
 
 
 async def require_admin(
+    request: Request,
     x_api_key: str = Header(..., alias="X-Api-Key"),
 ) -> User:
     """Require admin role."""
-    user = await get_current_user(x_api_key)
+    user = await get_current_user(request, x_api_key)
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
