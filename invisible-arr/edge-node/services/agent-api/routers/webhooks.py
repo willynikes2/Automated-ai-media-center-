@@ -30,6 +30,21 @@ from shared.canonical import (
 logger = logging.getLogger("agent-api.webhooks")
 router = APIRouter()
 
+# Shared webhook secret — Arr webhook URLs should include ?token=<secret>
+_WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+
+def _verify_webhook_token(
+    token: str | None,
+    x_webhook_token: str | None = None,
+) -> None:
+    """Reject requests when WEBHOOK_SECRET is set but caller doesn't match."""
+    if not _WEBHOOK_SECRET:
+        return  # Not configured — allow (backwards compat during rollout)
+    provided = (x_webhook_token or token or "").strip()
+    if provided != _WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+
 
 def _extract_job_id(payload: dict[str, Any]) -> str | None:
     """Try to find a job_id reference in the webhook payload.
@@ -57,8 +72,13 @@ def _extract_job_id(payload: dict[str, Any]) -> str | None:
 
 
 @router.post("/webhooks/arr", status_code=200)
-async def receive_arr_webhook(payload: dict[str, Any]) -> dict[str, str]:
+async def receive_arr_webhook(
+    payload: dict[str, Any],
+    token: str | None = Query(default=None),
+    x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
+) -> dict[str, str]:
     """Ingest a Sonarr / Radarr webhook and log it as a job event."""
+    _verify_webhook_token(token, x_webhook_token)
 
     event_type: str = payload.get("eventType", "unknown")
     logger.info(
@@ -121,9 +141,12 @@ async def receive_rdt_complete(
     - job_id: optional Invisible Arr job UUID
     """
     config = get_config()
-    expected = config.rdt_webhook_token.strip()
+    expected = (config.rdt_webhook_token or "").strip()
     provided = (x_webhook_token or token or "").strip()
-    if expected and provided != expected:
+    # Also accept the shared WEBHOOK_SECRET as fallback
+    if expected and provided != expected and provided != _WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+    if not expected and _WEBHOOK_SECRET and provided != _WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
     category = str(
@@ -619,12 +642,22 @@ async def _process_arr_webhook(
 
 
 @router.post("/webhooks/radarr", status_code=200)
-async def receive_radarr_webhook(payload: dict[str, Any]) -> dict[str, str]:
+async def receive_radarr_webhook(
+    payload: dict[str, Any],
+    token: str | None = Query(default=None),
+    x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
+) -> dict[str, str]:
     """Process Radarr webhook and advance job state."""
+    _verify_webhook_token(token, x_webhook_token)
     return await _process_arr_webhook(payload, source="radarr")
 
 
 @router.post("/webhooks/sonarr", status_code=200)
-async def receive_sonarr_webhook(payload: dict[str, Any]) -> dict[str, str]:
+async def receive_sonarr_webhook(
+    payload: dict[str, Any],
+    token: str | None = Query(default=None),
+    x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
+) -> dict[str, str]:
     """Process Sonarr webhook and advance job state."""
+    _verify_webhook_token(token, x_webhook_token)
     return await _process_arr_webhook(payload, source="sonarr")

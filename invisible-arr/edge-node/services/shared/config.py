@@ -29,13 +29,8 @@ class Settings(BaseSettings):
     rd_api_token: str = ""
     rd_enabled: bool = False
 
-    # Torrents (direct with secure DNS, no VPN)
+    # Torrents (via rdt-client which emulates qBittorrent API)
     torrent_enabled: bool = True
-
-    # qBittorrent
-    qbt_url: str = "http://qbittorrent:8080"
-    qbt_username: str = "admin"
-    qbt_password: str = ""
 
     # Usenet
     usenet_enabled: bool = False

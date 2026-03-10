@@ -37,11 +37,11 @@ class NewUserPersona(BasePersona):
             status_resp = await self.client.get(f"/v1/jobs/{job_id}")
             assert status_resp.status_code == 200
             job = status_resp.json()
-            # Any non-terminal state means the pipeline started correctly
-            non_terminal = {"CREATED", "REQUESTED", "RESOLVING", "SEARCHING",
-                           "SELECTED", "DOWNLOADING", "IMPORTING", "WAITING",
-                           "ACQUIRING", "VERIFYING", "ADDING"}
-            assert job["state"] in non_terminal, \
+            # Any active or completed state means the pipeline started correctly
+            valid = {"CREATED", "REQUESTED", "RESOLVING", "SEARCHING",
+                     "SELECTED", "DOWNLOADING", "IMPORTING", "WAITING",
+                     "ACQUIRING", "VERIFYING", "ADDING", "AVAILABLE"}
+            assert job["state"] in valid, \
                 f"Unexpected state: {job['state']}"
         elif self.config.mode in ("mock", "full"):
             # Poll until terminal state (max 5 min)
@@ -75,10 +75,11 @@ class NewUserPersona(BasePersona):
             status_resp = await self.client.get(f"/v1/jobs/{data['id']}")
             assert status_resp.status_code == 200
             job = status_resp.json()
-            non_terminal = {"CREATED", "REQUESTED", "RESOLVING", "SEARCHING",
-                           "SELECTED", "DOWNLOADING", "IMPORTING", "WAITING",
-                           "ACQUIRING", "VERIFYING", "ADDING"}
-            assert job["state"] in non_terminal, \
+            # AVAILABLE is also valid — fast-cached content completes in <2s
+            valid = {"CREATED", "REQUESTED", "RESOLVING", "SEARCHING",
+                     "SELECTED", "DOWNLOADING", "IMPORTING", "WAITING",
+                     "ACQUIRING", "VERIFYING", "ADDING", "AVAILABLE"}
+            assert job["state"] in valid, \
                 f"Unexpected state: {job['state']}"
 
         return [cid] if cid else []

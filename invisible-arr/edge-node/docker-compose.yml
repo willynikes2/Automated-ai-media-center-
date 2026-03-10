@@ -71,6 +71,7 @@ services:
       - "traefik.http.routers.jellyfin.rule=Host(`media.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.jellyfin.entrypoints=websecure"
       - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.jellyfin.middlewares=security-headers@file"
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
     # Uncomment for GPU transcoding:
     # devices:
@@ -95,6 +96,7 @@ services:
       - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
     networks:
       - internal
@@ -125,6 +127,7 @@ services:
       - "traefik.http.routers.landing.rule=Host(`${DOMAIN:-localhost}`)"
       - "traefik.http.routers.landing.entrypoints=websecure"
       - "traefik.http.routers.landing.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.landing.middlewares=security-headers@file"
       - "traefik.http.services.landing.loadbalancer.server.port=80"
     networks:
       - internal
@@ -180,25 +183,8 @@ services:
   # DOWNLOAD CLIENTS
   # ═══════════════════════════════════════
 
-  qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
-    container_name: qbittorrent
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-America/New_York}
-      - WEBUI_PORT=8080
-    volumes:
-      - ${CONFIG_PATH:-./config}/qbittorrent:/config
-      - ${DATA_PATH:-./data}/torrents:/data/torrents
-    ports:
-      - "127.0.0.1:${QBITTORRENT_PORT:-8080}:8080"
-    networks:
-      - internal
+  # qBittorrent REMOVED — rdt-client emulates qBit API for Radarr/Sonarr,
+  # all downloads go through Real-Debrid. No VPN needed either.
 
   rdt-client:
     image: rogerfar/rdtclient:latest
@@ -264,6 +250,8 @@ services:
     environment:
       - TZ=${TZ:-America/New_York}
       - CRON_SCHEDULE=@daily
+      - RADARR_API_KEY=${RADARR_API_KEY:-}
+      - SONARR_API_KEY=${SONARR_API_KEY:-}
     volumes:
       - ${CONFIG_PATH:-./config}/recyclarr:/config
     networks:
@@ -397,6 +385,7 @@ services:
       - "traefik.http.routers.grafana.rule=Host(`status.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.grafana.entrypoints=websecure"
       - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.grafana.middlewares=security-headers@file"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
     depends_on:
       - prometheus
@@ -451,6 +440,7 @@ services:
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-}
       - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
       - ENV=${ENV:-dev}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
     healthcheck:
@@ -464,7 +454,7 @@ services:
       - "traefik.http.routers.agent-api.rule=Host(`api.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.agent-api.entrypoints=websecure"
       - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.agent-api.middlewares=api-cors"
+      - "traefik.http.routers.agent-api.middlewares=api-cors,security-headers@file"
       - "traefik.http.services.agent-api.loadbalancer.server.port=8880"
       # CORS middleware for frontend cross-origin requests
       - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
@@ -502,9 +492,6 @@ services:
       - USENET_ENABLED=${USENET_ENABLED:-false}
       - SABNZBD_URL=http://sabnzbd:8080
       - SABNZBD_API_KEY=${SABNZBD_API_KEY:-}
-      - QBT_URL=http://qbittorrent:8080
-      - QBT_USERNAME=admin
-      - QBT_PASSWORD=${QBT_PASSWORD:-}
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=${PROWLARR_API_KEY:-}
       - SONARR_URL=http://sonarr:8989
@@ -600,6 +587,7 @@ services:
       - "traefik.http.routers.iptv.rule=Host(`iptv.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.iptv.entrypoints=websecure"
       - "traefik.http.routers.iptv.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.iptv.middlewares=security-headers@file"
       - "traefik.http.services.iptv.loadbalancer.server.port=8881"
     profiles:
       - iptv
