@@ -3,15 +3,27 @@ import { SourceManager } from '@/components/iptv/SourceManager';
 import { ChannelGrid } from '@/components/iptv/ChannelGrid';
 import { EPGPreview } from '@/components/iptv/EPGPreview';
 import { EPGGuide } from '@/components/iptv/EPGGuide';
+import { useAuthStore } from '@/stores/authStore';
 
-const tabs = [
+interface TabDef {
+  key: string;
+  label: string;
+  adminOnly?: boolean;
+}
+
+const tabs: TabDef[] = [
   { key: 'channels', label: 'Channels' },
   { key: 'guide', label: 'Guide' },
-  { key: 'sources', label: 'Sources' },
-  { key: 'setup', label: 'Setup' },
-] as const;
+  { key: 'sources', label: 'Sources', adminOnly: true },
+  { key: 'setup', label: 'Setup', adminOnly: true },
+];
 
 export function IPTVPage() {
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.role === 'admin';
+
+  const visibleTabs = tabs.filter((t) => !t.adminOnly || isAdmin);
+
   const [tab, setTab] = useState<string>('channels');
 
   return (
@@ -20,7 +32,7 @@ export function IPTVPage() {
       <p className="text-sm text-text-secondary mb-6">Manage your IPTV sources, channels, and Live TV integration.</p>
 
       <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit mb-6">
-        {tabs.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
@@ -35,8 +47,8 @@ export function IPTVPage() {
 
       {tab === 'channels' && <ChannelGrid />}
       {tab === 'guide' && <EPGGuide />}
-      {tab === 'sources' && <SourceManager />}
-      {tab === 'setup' && <EPGPreview />}
+      {isAdmin && tab === 'sources' && <SourceManager />}
+      {isAdmin && tab === 'setup' && <EPGPreview />}
     </div>
   );
 }
