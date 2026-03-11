@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 
 import httpx
 
+try:
+    from playwright.async_api import async_playwright, Browser, Page
+except ImportError:
+    async_playwright = None  # Playwright optional for API-only tests
+
 
 @dataclass
 class QAConfig:
@@ -92,3 +97,35 @@ async def cleanup_test_user(client: APIClient, user_id: str) -> None:
     await client.post(f"/v1/admin/users/{user_id}/deactivate")
     # Delete any jobs created by this user
     await client.delete(f"/v1/admin/users/{user_id}/jobs")
+
+
+class BrowserFixture:
+    """Manages Playwright browser lifecycle for QA tests."""
+
+    def __init__(self, config: QAConfig):
+        self.config = config
+        self._playwright = None
+        self._browser: Browser | None = None
+
+    async def start(self) -> None:
+        if async_playwright is None:
+            raise RuntimeError("playwright not installed — pip install playwright")
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-gpu"],
+        )
+
+    async def new_page(self) -> Page:
+        assert self._browser, "Call start() first"
+        context = await self._browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            base_url=self.config.frontend_url,
+        )
+        return await context.new_page()
+
+    async def stop(self) -> None:
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()

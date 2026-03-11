@@ -77,8 +77,10 @@ class BasePersona:
 
 def _load_personas():
     """Import all persona modules to trigger @register_persona decorators."""
-    from api_tests import new_user, power_user, live_tv_user, resilience_user
-    from browser_tests import browser_user
+    from api_tests import new_user, power_user, live_tv_user, resilience_user  # noqa: F401
+    from api_tests import onboarding_user  # noqa: F401
+    from browser_tests import browser_user  # noqa: F401
+    from browser_tests import app_audit  # noqa: F401
 
 
 async def main():
@@ -90,7 +92,8 @@ async def main():
     parser.add_argument("--full", action="store_const", const="full", dest="mode",
                         help="Shortcut for --mode full")
     parser.add_argument("--persona", choices=["new_user", "power_user", "browser_user",
-                                               "live_tv_user", "resilience_user"],
+                                               "live_tv_user", "resilience_user",
+                                               "onboarding", "app-audit"],
                         help="Run single persona (default: all)")
     parser.add_argument("--last-run", action="store_true",
                         help="Print last run summary and exit")
