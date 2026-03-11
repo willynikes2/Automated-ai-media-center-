@@ -122,8 +122,41 @@ export async function loginWithGoogle(code: string, redirectUri: string): Promis
   return mapAuthResponse(res.data, { email: undefined });
 }
 
+/* ── Provision types ─────────────────────────────────────────── */
+
+export interface ProvisionStatusItem {
+  status: 'pending' | 'in_progress' | 'success' | 'failed';
+  error?: string;
+}
+
+export interface ProvisionStatus {
+  iptv: ProvisionStatusItem;
+  rd: ProvisionStatusItem;
+  library: ProvisionStatusItem;
+  prefs: ProvisionStatusItem;
+  all_complete: boolean;
+  setup_complete: boolean;
+}
+
+/* ── Provision API ───────────────────────────────────────────── */
+
+export async function provision(data: {
+  rd_api_token?: string;
+  preferred_resolution?: number;
+  allow_4k?: boolean;
+}): Promise<ProvisionStatus> {
+  const { data: result } = await agentApi.post('/v1/onboarding/provision', data);
+  return result;
+}
+
+export async function getProvisionStatus(): Promise<ProvisionStatus> {
+  const { data: result } = await agentApi.get('/v1/onboarding/status');
+  return result;
+}
+
 /* ── Setup (post-registration onboarding) ────────────────────── */
 
+/** @deprecated Use provision() instead */
 export async function submitSetup(data: {
   rd_api_token?: string;
   preferred_resolution?: number;
