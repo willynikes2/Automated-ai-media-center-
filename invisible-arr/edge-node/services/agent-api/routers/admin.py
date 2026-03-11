@@ -15,10 +15,11 @@ from sqlalchemy import func, select
 from dependencies import require_admin
 from shared.config import get_config
 from shared.database import get_session_factory
-from shared.models import Invite, Job, User
+from shared.models import Invite, Job, RdPoolAccount, User
 from shared.radarr_client import RadarrClient
 from shared.schemas import (
     AdminStatsResponse,
+    AdminUserCreate,
     AdminUserUpdate,
     InviteCreate,
     InviteResponse,
@@ -161,6 +162,35 @@ async def get_arr_diagnostics(user: User = Depends(require_admin)) -> ArrDiagnos
 # ---------------------------------------------------------------------------
 
 
+@router.post("/admin/users", response_model=UserResponse)
+async def create_user(
+    body: AdminUserCreate,
+    user: User = Depends(require_admin),
+) -> UserResponse:
+    """Create a new user (admin only). Returns the created user with api_key."""
+    factory = get_session_factory()
+    async with factory() as session:
+        # Check for duplicate email
+        existing = await session.execute(
+            select(User).where(User.email == body.email)
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=409, detail="Email already exists")
+
+        new_user = User(
+            name=body.name,
+            email=body.email,
+            role=body.role,
+            tier=body.tier,
+            is_active=body.is_active,
+        )
+        session.add(new_user)
+        await session.commit()
+        await session.refresh(new_user)
+        logger.info("Admin created user: %s (%s)", new_user.email, new_user.id)
+        return UserResponse.model_validate(new_user)
+
+
 @router.get("/admin/users", response_model=list[UserResponse])
 async def list_users(user: User = Depends(require_admin)) -> list[UserResponse]:
     """List all users ordered by created_at descending."""
@@ -208,6 +238,30 @@ async def deactivate_user(
             raise HTTPException(status_code=404, detail="User not found")
 
         target.is_active = False
+
+        # Deprovision IPTV line
+        if target.iptv_line_username:
+            try:
+                config = get_config()
+                if config.kemoiptv_api_url:
+                    from shared.kemoiptv_client import KemoIPTVClient
+                    async with KemoIPTVClient(
+                        config.kemoiptv_api_url,
+                        config.kemoiptv_reseller_username,
+                        config.kemoiptv_reseller_password,
+                    ) as client:
+                        await client.disable_line(target.iptv_line_username)
+            except Exception as e:
+                logger.warning("Failed to disable IPTV line for %s: %s", user_id, e)
+
+        # Release RD pool slot
+        if target.rd_pool_account_id:
+            pool = await session.get(RdPoolAccount, target.rd_pool_account_id)
+            if pool and pool.current_users > 0:
+                pool.current_users -= 1
+            target.rd_pool_account_id = None
+            target.rd_source = "user_provided"
+
         await session.commit()
     return {"status": "deactivated"}
 
