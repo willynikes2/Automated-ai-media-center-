@@ -910,6 +910,9 @@ async def _add_to_sonarr(
             # Ensure target season is monitored
             await _ensure_sonarr_monitored(sonarr, existing, job)
 
+            # Check if content has aired — move to WAITING if not
+            await _check_sonarr_aired(sonarr, series_id, job)
+
             if job.season is not None and job.episode is not None:
                 # Search for specific episode to avoid rate-limiting indexers
                 episodes = await sonarr.get_episodes(series_id, job.season)
@@ -962,6 +965,9 @@ async def _add_to_sonarr(
         # Ensure monitoring on target season/episodes so Sonarr will grab releases
         await _ensure_sonarr_monitored(sonarr, series, job)
 
+        # Check if content has aired — move to WAITING if not
+        await _check_sonarr_aired(sonarr, series_id, job)
+
         # Trigger search (was deferred so we could save ID first)
         if monitor == "all":
             await sonarr.search_series(series_id)
@@ -983,6 +989,18 @@ async def _add_to_sonarr(
                 logger.warning("Episode S%02dE%02d not found, searching full season", job.season, job.episode)
                 await sonarr.search_season(series_id, job.season)
         elif job.season is not None:
+            # Monitor all episodes in the season before searching —
+            # Sonarr ignores unmonitored episodes even if the season is monitored
+            episodes = await sonarr.get_episodes(series_id, job.season)
+            unmonitored = [e for e in episodes if not e.get("monitored")]
+            for ep in unmonitored:
+                ep["monitored"] = True
+                await sonarr.update_episode(ep)
+            if unmonitored:
+                logger.info(
+                    "Monitored %d episodes for S%02d before season search",
+                    len(unmonitored), job.season,
+                )
             await sonarr.search_season(series_id, job.season)
 
         return series_id
@@ -1021,6 +1039,69 @@ async def _ensure_radarr_root_folder(radarr: RadarrClient, path: str) -> str:
             )
             return str(fallback)
         raise
+
+
+async def _check_sonarr_aired(sonarr: SonarrClient, series_id: int, job: Job) -> None:
+    """Raise ContentNotReleasedError if no episodes have aired yet.
+
+    Checks the specific season/episode requested, or the whole series if no
+    season specified.  Uses Sonarr's airDateUtc on episodes.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+
+    if job.season is not None:
+        episodes = await sonarr.get_episodes(series_id, job.season)
+    else:
+        # No specific season — check all episodes
+        episodes = await sonarr.get_episodes(series_id)
+
+    if job.episode is not None:
+        # Specific episode requested
+        target = next((e for e in episodes if e.get("episodeNumber") == job.episode
+                        and e.get("seasonNumber") == (job.season or 1)), None)
+        if target:
+            air = target.get("airDateUtc")
+            if air:
+                air_dt = datetime.fromisoformat(air.replace("Z", "+00:00"))
+                if air_dt > now:
+                    raise ContentNotReleasedError(
+                        f"Episode S{job.season:02d}E{job.episode:02d} airs {air_dt.strftime('%Y-%m-%d')}",
+                        monitor_reason=f"Episode has not aired yet (airs {air_dt.strftime('%Y-%m-%d')}). Monitoring.",
+                    )
+            else:
+                # No air date at all — unannounced
+                raise ContentNotReleasedError(
+                    f"Episode S{job.season:02d}E{job.episode:02d} has no air date",
+                    monitor_reason="Episode has no scheduled air date. Monitoring.",
+                )
+        return  # Episode not found in Sonarr data — let search proceed
+
+    # Season or full series — check if ANY episode has aired
+    aired_count = 0
+    for ep in episodes:
+        air = ep.get("airDateUtc")
+        if air:
+            air_dt = datetime.fromisoformat(air.replace("Z", "+00:00"))
+            if air_dt <= now:
+                aired_count += 1
+
+    if aired_count == 0 and episodes:
+        # Find the earliest air date to report
+        earliest = None
+        for ep in episodes:
+            air = ep.get("airDateUtc")
+            if air:
+                dt = datetime.fromisoformat(air.replace("Z", "+00:00"))
+                if earliest is None or dt < earliest:
+                    earliest = dt
+
+        date_str = earliest.strftime('%Y-%m-%d') if earliest else "TBA"
+        raise ContentNotReleasedError(
+            f"No episodes have aired yet (premieres {date_str})",
+            monitor_reason=f"Show has not aired yet (premieres {date_str}). Monitoring.",
+        )
 
 
 async def _ensure_sonarr_monitored(sonarr: SonarrClient, series: dict, job: Job) -> None:

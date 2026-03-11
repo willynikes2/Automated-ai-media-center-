@@ -203,6 +203,7 @@ services:
       - ${CONFIG_PATH:-./config}/rdtclient:/data/db
       - ${DATA_PATH:-./data}:/data
       - ./scripts:/scripts:ro
+      - ./scripts/fix-rdtclient-auth.sh:/custom-cont-init.d/fix-rdtclient-auth.sh:ro
     networks:
       - internal
 

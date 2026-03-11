@@ -32,6 +32,36 @@ HEALTH_CHECK_INTERVAL = 60  # seconds between checks
 STALE_THRESHOLD = 600       # 10 min without update = check on it
 MAX_DOWNLOAD_HOURS = int(os.environ.get("MAX_DOWNLOAD_HOURS", "6"))  # max time in DOWNLOADING
 MAX_IMPORT_ERROR_MINUTES = 30  # auto-fail after this many min stuck with import errors
+MAX_ORPHAN_MINUTES = 60  # auto-fail jobs with no queue item and no file after this long
+MAX_SEARCHING_MINUTES = 30  # auto-fail jobs stuck in SEARCHING
+
+
+async def _remove_queue_item_and_retry(session, job: Job, queue_item: dict, reason: str) -> None:
+    """Remove a broken queue item from Arr, blacklist the release, and re-search."""
+    queue_id = queue_item.get("id")
+    try:
+        if job.media_type == "movie" and job.radarr_movie_id:
+            async with RadarrClient() as client:
+                await client.delete_queue_item(queue_id, blacklist=True, remove_from_client=True)
+        elif job.sonarr_series_id:
+            async with SonarrClient() as client:
+                await client.delete_queue_item(queue_id, blacklist=True, remove_from_client=True)
+        logger.info("Health check: removed queue item %s for job %s", queue_id, job.id)
+    except Exception:
+        logger.exception("Health check: failed to remove queue item %s", queue_id)
+
+    # Transition back to SEARCHING so the worker re-searches
+    job.state = JobState.SEARCHING.value
+    job.rd_torrent_id = None
+    job.arr_queue_id = None
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    session.add(JobEvent(
+        job_id=job.id,
+        state=JobState.SEARCHING.value,
+        message=f"Auto-retry: {reason}. Blacklisted release, re-searching.",
+    ))
+    logger.info("Health check: job %s (%s) re-queued for search: %s", job.id, job.title, reason)
 
 
 async def monitor_downloads(shutdown_event: asyncio.Event) -> None:
@@ -62,6 +92,7 @@ async def _health_check_cycle() -> None:
                 Job.state.in_([
                     JobState.SEARCHING.value,
                     JobState.DOWNLOADING.value,
+                    JobState.IMPORTING.value,
                     JobState.INVESTIGATING.value,
                     # Legacy states from before migration
                     JobState.RESOLVING.value,
@@ -180,6 +211,21 @@ async def _check_job_health(session, job: Job) -> None:
         sizeleft = queue_item.get("sizeleft", 0)
         pct = max(0, min(100, int(((size - sizeleft) / size) * 100))) if size > 0 else 0
 
+        # Zero-size items (rdt-client error/reporting issue) — treat as stuck
+        if size == 0 and tracked_status in ("warning", "error"):
+            logger.warning(
+                "Health check: job %s (%s) has queue item with size=0 (download client error)",
+                job.id, job.title,
+            )
+            if job.updated_at and (datetime.utcnow() - job.updated_at).total_seconds() > MAX_IMPORT_ERROR_MINUTES * 60:
+                # Remove queue item and re-search
+                await _remove_queue_item_and_retry(session, job, queue_item,
+                    f"Download client reported size=0 for {MAX_IMPORT_ERROR_MINUTES}+ min")
+            else:
+                job.updated_at = datetime.utcnow()
+                session.add(job)
+            return
+
         if tracked_status in ("warning", "error") and pct >= 100:
             # Download complete but import failing (e.g., missing files, path not found)
             error_details = "; ".join(
@@ -238,7 +284,33 @@ async def _check_job_health(session, job: Job) -> None:
         session.add(job)
         logger.info("Health check: job %s (%s) downloading at %d%%", job.id, job.title, pct)
     else:
-        # No queue item, no file — just touch timestamp so we don't spam
-        job.updated_at = datetime.utcnow()
-        session.add(job)
-        logger.debug("Health check: job %s (%s) — no queue item, no file", job.id, job.title)
+        # No queue item, no file — something went wrong
+        minutes_stuck = (datetime.utcnow() - job.updated_at).total_seconds() / 60 if job.updated_at else 0
+
+        if job.state == JobState.SEARCHING.value and minutes_stuck > MAX_SEARCHING_MINUTES:
+            # Stuck in SEARCHING too long — search likely failed silently
+            job.state = JobState.FAILED.value
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            session.add(JobEvent(
+                job_id=job.id,
+                state=JobState.FAILED.value,
+                message=f"Auto-failed: stuck in SEARCHING for {minutes_stuck:.0f} min with no queue item",
+            ))
+            logger.error("Health check: auto-failing job %s — stuck SEARCHING for %.0f min", job.id, minutes_stuck)
+        elif minutes_stuck > MAX_ORPHAN_MINUTES:
+            # Orphan job — no download client activity, no file
+            job.state = JobState.FAILED.value
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            session.add(JobEvent(
+                job_id=job.id,
+                state=JobState.FAILED.value,
+                message=f"Auto-failed: orphan job — no queue item, no file for {minutes_stuck:.0f} min",
+            ))
+            logger.error("Health check: auto-failing orphan job %s after %.0f min", job.id, minutes_stuck)
+        else:
+            # Not yet past threshold — touch timestamp but log warning
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            logger.warning("Health check: job %s (%s) — no queue item, no file (%.0f min)", job.id, job.title, minutes_stuck)

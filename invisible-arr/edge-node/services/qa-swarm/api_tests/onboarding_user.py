@@ -23,6 +23,8 @@ class OnboardingPersona(BasePersona):
         super().__init__(client, config)
         self.browser = BrowserFixture(config)
         self.run_id = config.persona or "onboard"
+        # Admin client for invite/user creation (separate from test user client)
+        self.admin_client = APIClient(config)
 
     async def run_all(self):
         await self.browser.start()
@@ -46,13 +48,14 @@ class OnboardingPersona(BasePersona):
             await self.run_scenario("browser_back_button", self._browser_back_button)
         finally:
             await self.browser.stop()
+            await self.admin_client.close()
         return self.results
 
     # ── Helpers ──
 
     async def _create_user_and_login(self, page, tier="starter"):
         """Create a user via invite, inject auth into localStorage, go to /setup."""
-        resp = await self.client.post("/v1/admin/invites", json={"tier": tier})
+        resp = await self.admin_client.post("/v1/admin/invites", json={"tier": tier})
         assert resp.status_code in (200, 201), f"Invite creation failed: {resp.status_code}"
         invite = resp.json()
 
@@ -95,7 +98,8 @@ class OnboardingPersona(BasePersona):
 
     async def _register_redirect_setup(self):
         """Register with valid invite → redirect to /setup."""
-        resp = await self.client.post("/v1/admin/invites", json={"tier": "starter"})
+        resp = await self.admin_client.post("/v1/admin/invites", json={"tier": "starter"})
+        assert resp.status_code in (200, 201), f"Invite creation failed: {resp.status_code}"
         invite = resp.json()
         page = await self.browser.new_page()
         try:
