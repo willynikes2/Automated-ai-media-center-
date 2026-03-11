@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Integer, JSON, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.database import Base
@@ -131,8 +132,29 @@ class User(Base):
     last_login: Mapped[datetime | None] = mapped_column(nullable=True)
     invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
+    # Onboarding provisioning
+    iptv_line_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    iptv_line_password_enc: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    iptv_provisioned_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    rd_source: Mapped[str] = mapped_column(String(20), default="user_provided")
+    rd_pool_account_id: Mapped[int | None] = mapped_column(ForeignKey("rd_pool_accounts.id", ondelete="SET NULL"), nullable=True)
+    onboarding_status: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     prefs: Mapped[list["Prefs"]] = relationship(back_populates="user", lazy="noload")
     jobs: Mapped[list["Job"]] = relationship(back_populates="user", lazy="noload")
+
+
+class RdPoolAccount(Base):
+    __tablename__ = "rd_pool_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255))
+    api_token_enc: Mapped[str] = mapped_column(String(1000))
+    max_users: Mapped[int] = mapped_column(default=5)
+    current_users: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 
 
 class Prefs(Base):
