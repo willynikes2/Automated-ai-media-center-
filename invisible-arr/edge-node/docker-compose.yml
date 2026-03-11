@@ -73,6 +73,8 @@ services:
       - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
       - "traefik.http.routers.jellyfin.middlewares=security-headers@file"
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+    extra_hosts:
+      - "m3u.cutdacord.app:178.156.255.110"
     # Uncomment for GPU transcoding:
     # devices:
     #   - /dev/dri:/dev/dri
@@ -148,6 +150,7 @@ services:
       - ${CONFIG_PATH:-./config}/sonarr:/config
       - ${DATA_PATH:-./data}:/data
       - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
+      - ./data/usenet:/data/usenet
     networks:
       - internal
 
@@ -163,6 +166,7 @@ services:
       - ${CONFIG_PATH:-./config}/radarr:/config
       - ${DATA_PATH:-./data}:/data
       - ${DATA_PATH:-./data}/zurg:/data/zurg:ro,slave
+      - ./data/usenet:/data/usenet
     networks:
       - internal
 
@@ -441,6 +445,9 @@ services:
       - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
       - ENV=${ENV:-dev}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - KEMOIPTV_API_URL=${KEMOIPTV_API_URL:-}
+      - KEMOIPTV_RESELLER_USERNAME=${KEMOIPTV_RESELLER_USERNAME:-}
+      - KEMOIPTV_RESELLER_PASSWORD=${KEMOIPTV_RESELLER_PASSWORD:-}
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-8880}:8880"
     healthcheck:
@@ -589,6 +596,40 @@ services:
       - "traefik.http.routers.iptv.tls.certresolver=letsencrypt"
       - "traefik.http.routers.iptv.middlewares=security-headers@file"
       - "traefik.http.services.iptv.loadbalancer.server.port=8881"
+    profiles:
+      - iptv
+    networks:
+      - internal
+
+  m3u-editor:
+    image: sparkison/m3u-editor:latest
+    container_name: m3u-editor
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - APP_URL=https://m3u.${DOMAIN:-localhost}
+      - M3U_PROXY_ENABLED=true
+      - REVERB_HOST=0.0.0.0
+      - REVERB_SCHEME=https
+    volumes:
+      - ${CONFIG_PATH:-./config}/m3u-editor:/var/www/config
+      - ${MEDIA_PATH:-./data/media}/VOD/Series:/media/Series
+      - ${MEDIA_PATH:-./data/media}/VOD/Movies:/media/Movies
+      - ${CONFIG_PATH:-./config}/iptv:/data/iptv:ro
+    ports:
+      - "127.0.0.1:${M3U_EDITOR_PORT:-36400}:36400"
+    labels:
+      - "traefik.enable=${DOMAIN:+true}"
+      - "traefik.http.routers.m3u-editor.rule=Host(`m3u.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.m3u-editor.entrypoints=websecure"
+      - "traefik.http.routers.m3u-editor.tls.certresolver=letsencrypt"
+      - "traefik.http.services.m3u-editor.loadbalancer.server.port=36400"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:36400/up || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles:
       - iptv
     networks:

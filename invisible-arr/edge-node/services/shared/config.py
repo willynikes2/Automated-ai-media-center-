@@ -66,6 +66,9 @@ class Settings(BaseSettings):
 
     # IPTV
     iptv_enabled: bool = False
+    kemoiptv_api_url: str = ""
+    kemoiptv_reseller_username: str = ""
+    kemoiptv_reseller_password: str = ""
 
     # Service ports
     agent_api_port: int = 8880

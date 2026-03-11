@@ -27,7 +27,7 @@ if str(_app_root) not in sys.path:
 from shared.database import init_db, get_engine  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 
-from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search, storage, admin, reseller, bugs, library, recommendations, catalog, qa  # noqa: E402
+from routers import health, requests, jobs, prefs, webhooks, auth, tmdb, search, storage, admin, reseller, bugs, library, recommendations, catalog, qa, onboarding  # noqa: E402
 
 from shared.logging import setup_logging  # noqa: E402
 from shared.middleware import CorrelationMiddleware  # noqa: E402
@@ -132,6 +132,7 @@ app.include_router(library.router, prefix="/v1", tags=["library"])
 app.include_router(recommendations.router, prefix="/v1", tags=["recommendations"])
 app.include_router(catalog.router, prefix="/v1", tags=["catalog"])
 app.include_router(qa.router, prefix="/v1", tags=["qa"])
+app.include_router(onboarding.router, prefix="/v1", tags=["onboarding"])
 
 
 # ---------------------------------------------------------------------------
