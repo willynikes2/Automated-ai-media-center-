@@ -184,13 +184,14 @@ class AuthResponse(BaseModel):
 
 
 class UserResponse(BaseModel):
-    """Public user info (no secrets)."""
+    """User info for admin views."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     name: str
     email: str | None = None
+    api_key: str | None = None
     role: str
     tier: str
     is_active: bool
@@ -250,6 +251,16 @@ class AdminStatsResponse(BaseModel):
     storage_used_gb: float
 
 
+class AdminUserCreate(BaseModel):
+    """Body for POST /v1/admin/users."""
+
+    email: str
+    name: str
+    role: str = "user"
+    tier: str = "starter"
+    is_active: bool = True
+
+
 class AdminUserUpdate(BaseModel):
     """Body for PUT /v1/admin/users/{id}."""
 
@@ -294,3 +305,30 @@ class BugReportUpdate(BaseModel):
 
     status: str | None = None
     admin_notes: str | None = Field(None, max_length=5000)
+
+
+# ---------------------------------------------------------------------------
+# Onboarding provisioning schemas
+# ---------------------------------------------------------------------------
+
+
+class ProvisionRequest(BaseModel):
+    rd_api_token: str | None = None
+    preferred_resolution: int = 1080
+    allow_4k: bool = False
+
+
+class ProvisionStatusItem(BaseModel):
+    status: str
+    error: str | None = None
+
+
+class ProvisionStatusResponse(BaseModel):
+    iptv: ProvisionStatusItem
+    rd: ProvisionStatusItem
+    library: ProvisionStatusItem
+    prefs: ProvisionStatusItem
+    all_complete: bool
+    setup_complete: bool
+
+    model_config = ConfigDict(from_attributes=True)
