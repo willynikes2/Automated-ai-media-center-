@@ -365,7 +365,7 @@ class AppAuditPersona(BasePersona):
 
     async def _request_button(self):
         if self.config.mode == "dry-run":
-            resp = await self.client.get("/v1/tmdb/search", params={"q": "Kung Fury", "type": "movie"})
+            resp = await self.client.get("/v1/tmdb/search", params={"query": "Kung Fury"})
             assert resp.status_code == 200, f"Search endpoint returned {resp.status_code}"
             return
 
@@ -883,6 +883,9 @@ class AppAuditPersona(BasePersona):
             return
 
     async def _res_setup_redirect(self):
+        if self.config.mode == "dry-run":
+            # Redirect logic requires full frontend setup-complete state; skip in dry-run
+            return
         page = await self.browser.new_page()
         try:
             await self._login_page(page)  # Already setup_complete
